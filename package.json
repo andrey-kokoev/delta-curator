@@ -10,7 +10,7 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "dev": "delta-curator watch",
-    "deploy": "pnpm run build && pnpm -F @delta-curator/worker deploy"
+    "deploy": "pnpm run build && pnpm -F @delta-curator/worker exec wrangler deploy"
   },
   "workspaces": [
     "packages/*",
