@@ -1,5 +1,11 @@
 packages:
-  - 'packages/*'
-  - 'plugins/*'
-  - 'apps/*'
-  - 'examples/*'
+  - packages/*
+  - plugins/*
+  - apps/*
+  - examples/*
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - sqlite3
+  - workerd
