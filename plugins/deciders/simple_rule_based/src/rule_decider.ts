@@ -3,7 +3,8 @@
  * Applies simple policy rules based on comparison results
  */
 
-import type { Decider, CandidateAnalysis, DecisionResult } from '@delta-curator/protocol';
+import type { CandidateAnalysis, DecisionResult } from '@delta-curator/protocol';
+import type { Decider } from '@delta-curator/runtime';
 
 /**
  * RuleBasedDecider: Simple decision rules

@@ -16,7 +16,11 @@
     "paths": {
       "@delta-curator/protocol": ["packages/protocol/src"],
       "@delta-curator/runtime": ["packages/runtime/src"],
-      "@delta-curator/sdk": ["packages/sdk/src"]
+      "@delta-curator/sdk": ["packages/sdk/src"],
+      "@delta-curator/plugin-source-file-drop": ["plugins/sources/file_drop/src"],
+      "@delta-curator/plugin-comparator-fingerprint": ["plugins/comparators/fingerprint/src"],
+      "@delta-curator/plugin-decider-simple-rule-based": ["plugins/deciders/simple_rule_based/src"],
+      "@delta-curator/plugin-merger-json": ["plugins/mergers/json_merge/src"]
     }
   },
   "include": ["src"],

@@ -4,7 +4,8 @@
  */
 
 import { payloadHash } from '@delta-curator/protocol';
-import type { Comparator, CandidateDoc, BaseView, ComparisonResult } from '@delta-curator/protocol';
+import type { CandidateDoc, BaseView, ComparisonResult } from '@delta-curator/protocol';
+import type { Comparator } from '@delta-curator/runtime';
 
 /**
  * FingerprintComparator: Simple hash-based comparison
@@ -31,9 +32,9 @@ export class FingerprintComparator implements Comparator {
     const fingerprintView = baseViews.find((v) => v.viewName === 'fingerprint_index');
 
     if (fingerprintView && fingerprintView.state) {
-      const fingerprints = fingerprintView.state as any[];
+      const fingerprints = fingerprintView.state as unknown;
       if (Array.isArray(fingerprints)) {
-        isDuplicate = fingerprints.some(
+        isDuplicate = (fingerprints as any[]).some(
           (f: any) => f.payload_hash === candidateFingerprint
         );
       }

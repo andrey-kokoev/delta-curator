@@ -6,7 +6,8 @@
 
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { Source, SourceState, RawDocObserved } from '@delta-curator/protocol';
+import type { SourceState, RawDocObserved } from '@delta-curator/protocol';
+import type { Source } from '@delta-curator/runtime';
 
 /**
  * FileDropSource: reads JSON files from directory
