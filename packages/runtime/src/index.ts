@@ -2,3 +2,4 @@
 
 export * from './interfaces/index.js';
 export * from './commit/index.js';
+export * from './runner/index.js';
