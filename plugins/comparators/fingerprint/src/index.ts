@@ -1,0 +1,1 @@
+// Fingerprint comparator plugin

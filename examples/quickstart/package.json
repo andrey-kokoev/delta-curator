@@ -1,0 +1,17 @@
+{
+  "name": "@delta-curator/example-quickstart",
+  "version": "0.1.0",
+  "description": "Delta-Curator quickstart example",
+  "type": "module",
+  "scripts": {
+    "start": "node scenario.js"
+  },
+  "dependencies": {
+    "@delta-curator/protocol": "workspace:*",
+    "@delta-curator/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0"
+  }
+}
