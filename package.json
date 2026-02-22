@@ -9,7 +9,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "dev": "delta-curator watch"
+    "dev": "delta-curator watch",
+    "deploy": "pnpm run build && pnpm -F @delta-curator/worker deploy"
   },
   "workspaces": [
     "packages/*",
