@@ -98,6 +98,11 @@ export interface ComparisonResult {
     novelty: 'novel' | 'duplicate' | 'similar';
     confidence: number;
     rationale?: string;
+    signals?: {
+        rank_score?: number;
+        rank_backend?: 'workers_ai_rerank' | 'ai_search_rerank' | 'none';
+        rank_model?: string;
+    };
 }
 /**
  * Analysis output from comparator, input to decider
