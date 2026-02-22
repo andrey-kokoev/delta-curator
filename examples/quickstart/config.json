@@ -222,11 +222,18 @@
     },
 
     "ranking": {
-      "enabled": false,
-      "plugin": "railway_novelty_ranker",
-      "config": {
-        "url": "REPLACE_ME_RAILWAY_NOVELTY_ENDPOINT",
-        "timeout_ms": 8000
+      "ingest": {
+        "enabled": true,
+        "backend": "workers_ai_rerank",
+        "model": "@cf/baai/bge-reranker-base",
+        "query": "FDA communications relevant to Regeneron regulatory risk",
+        "max_passage_chars": 4000
+      },
+      "search": {
+        "enabled": true,
+        "backend": "ai_search_rerank",
+        "index": "delta-curator-regeneron",
+        "rerank": true
       }
     },
 

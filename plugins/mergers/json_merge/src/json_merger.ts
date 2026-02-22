@@ -3,7 +3,8 @@
  * Merges JSON payloads with conflict resolution
  */
 
-import type { Merger, CandidateDoc, MergeResult } from '@delta-curator/protocol';
+import type { CandidateDoc, MergeResult } from '@delta-curator/protocol';
+import type { Merger } from '@delta-curator/runtime';
 
 /**
  * JSONMerger: Simple JSON merging

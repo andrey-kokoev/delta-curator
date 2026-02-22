@@ -157,3 +157,21 @@ export interface Merger extends PluginMeta {
    */
   merge(candidate: CandidateDoc, baseDoc: CandidateDoc): Promise<MergeResult>;
 }
+
+/**
+ * Ranker plugin - scores passages for ranking
+ * Stage 6b in Runner pipeline (optional, per AGENT_BRIEF2.md)
+ */
+export interface Ranker extends PluginMeta {
+  /**
+   * Scores passages for ranking
+   *
+   * @param passages - Array of passages with id and text
+   * @returns Array of scores in same order as input
+   *
+   * CRITICAL: Must be referentially transparent (I4)
+   * - Same passages → identical scores
+   * - No side effects, no global state reads
+   */
+  score(passages: { id: string; text: string }[]): Promise<{ id: string; score: number }[]>;
+}

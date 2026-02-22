@@ -34,7 +34,7 @@ import type {
   CandidateDoc,
   BaseView
 } from '@delta-curator/protocol';
-import type { Source, Committer, Comparator, Decider, Merger, Clock } from '../interfaces/index.js';
+import type { Source, Committer, Comparator, Decider, Merger, Ranker, Clock } from '../interfaces/index.js';
 
 /**
  * Runner class
@@ -46,6 +46,7 @@ export class Runner {
     private comparator: Comparator,
     private decider: Decider,
     private merger?: Merger,
+    private ranker?: Ranker,
     private clock?: Clock
   ) {
     this.clock = clock || { now: () => new Date() };
@@ -119,6 +120,25 @@ export class Runner {
           i
         )
       );
+    }
+
+    // Step 6b: Ranking (optional, per AGENT_BRIEF2.md)
+    if (this.ranker) {
+      const passages = candidates.map(c => ({
+        id: c.source_item_id,
+        text: typeof c.payload === 'object' ?
+          JSON.stringify(c.payload).slice(0, 4000) :
+          String(c.payload).slice(0, 4000)
+      }));
+      const scores = await this.ranker.score(passages);
+      const scoreMap = new Map(scores.map(s => [s.id, s.score]));
+      for (const comp of comparisons) {
+        comp.signals = {
+          rank_score: scoreMap.get(comp.source_item_id),
+          rank_backend: 'workers_ai_rerank',
+          rank_model: undefined
+        };
+      }
     }
 
     // Step 7: Decider stage - decide policy

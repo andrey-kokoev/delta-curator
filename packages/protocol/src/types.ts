@@ -118,6 +118,11 @@ export interface ComparisonResult {
   novelty: 'novel' | 'duplicate' | 'similar';
   confidence: number; // 0.0-1.0
   rationale?: string;
+  signals?: {
+    rank_score?: number;
+    rank_backend?: 'workers_ai_rerank' | 'ai_search_rerank' | 'none';
+    rank_model?: string;
+  };
 }
 
 /**

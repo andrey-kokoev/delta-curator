@@ -13,7 +13,7 @@
   },
   "workspaces": [
     "packages/*",
-    "plugins/*",
+    "plugins/*/*",
     "apps/*",
     "examples/*"
   ],

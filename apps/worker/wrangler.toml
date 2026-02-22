@@ -1,0 +1,23 @@
+name = "delta-curator"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "delta-curator"
+database_id = "REPLACE_WITH_REAL_ID"
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "delta-curator-artifacts"
+
+[ai]
+binding = "AI"
+
+# AI Search not yet GA; placeholder for future integration
+# [[vectorize]]
+# binding = "AI_SEARCH"
+# index = "delta-curator-idx"
+
+[triggers]
+crons = ["0 8 * * *"]
