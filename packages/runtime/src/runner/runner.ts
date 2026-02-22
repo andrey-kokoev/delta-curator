@@ -271,10 +271,10 @@ export class Runner {
    * Get source state from committer
    */
   private async getSourceState(): Promise<SourceState> {
-    // Try to get from committer, default to empty state
     try {
-      // Would get from committer in production
-      return {};
+      const rows = ((await this.committer.getReadModelState?.('source_state')) ?? []) as any[];
+      const row = rows.find((r: any) => r.source_id === this.source.id);
+      return row ? JSON.parse(row.state) : {};
     } catch {
       return {};
     }
@@ -284,8 +284,17 @@ export class Runner {
    * Get base views for comparison
    */
   private async getBaseViews(): Promise<BaseView[]> {
-    // Would fetch from committer read models
-    return [];
+    const viewNames = ['fingerprint_index', 'curated_docs', 'hold_index'];
+    const views: BaseView[] = [];
+    for (const name of viewNames) {
+      try {
+        const rows = (await this.committer.getReadModelState?.(name)) ?? [];
+        views.push({ viewName: name, state: rows as any });
+      } catch {
+        // View may not exist yet
+      }
+    }
+    return views;
   }
 
   /**

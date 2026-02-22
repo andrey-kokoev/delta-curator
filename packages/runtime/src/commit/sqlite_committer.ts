@@ -325,14 +325,17 @@ export class SQLiteCommitter implements Committer {
       const events = (await this.allAsync('SELECT * FROM events ORDER BY rowid')) as any[];
 
       for (const event of events) {
-        // Simplified replay: for now, just populate curated_docs
-        if (event.event_type === 'item_appended') {
-          await this.runAsync(
-            `INSERT OR REPLACE INTO curated_docs
-             (doc_id, source_item_id, payload, last_event_id)
-             VALUES (?, ?, ?, ?)`,
-            [event.source_item_id, event.source_item_id, event.payload, event.event_id]
-          );
+        // Replay item_decided events with decision === 'append'
+        if (event.event_type === 'item_decided') {
+          const payload = JSON.parse(event.payload);
+          if (payload.decision === 'append') {
+            await this.runAsync(
+              `INSERT OR REPLACE INTO curated_docs
+               (doc_id, source_item_id, payload, last_event_id)
+               VALUES (?, ?, ?, ?)`,
+              [event.source_item_id, event.source_item_id, event.payload, event.event_id]
+            );
+          }
         }
       }
 
