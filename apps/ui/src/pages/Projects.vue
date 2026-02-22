@@ -1,0 +1,145 @@
+<template>
+  <div class="space-y-6">
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">Projects</h1>
+        <p class="text-muted-foreground">Manage your curation projects</p>
+      </div>
+      <RouterLink
+        to="/projects/new"
+        class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
+      >
+        <Plus class="h-4 w-4" />
+        New Project
+      </RouterLink>
+    </div>
+
+    <!-- Projects List -->
+    <div v-if="loading" class="text-center py-12">
+      <p class="text-muted-foreground">Loading projects...</p>
+    </div>
+
+    <div v-else-if="configs.length === 0" class="text-center py-12">
+      <FolderKanban class="mx-auto h-12 w-12 text-muted-foreground" />
+      <h3 class="mt-4 text-lg font-medium">No projects yet</h3>
+      <p class="mt-2 text-muted-foreground">Create your first project to get started</p>
+      <div class="mt-4 space-x-2">
+        <button
+          @click="seedProject"
+          class="rounded-lg border px-4 py-2 hover:bg-accent"
+          :disabled="seeding"
+        >
+          {{ seeding ? 'Seeding...' : 'Seed Demo Project' }}
+        </button>
+        <RouterLink
+          to="/projects/new"
+          class="inline-block rounded-lg bg-primary px-4 py-2 text-primary-foreground"
+        >
+          Create Project
+        </RouterLink>
+      </div>
+    </div>
+
+    <div v-else class="grid gap-4">
+      <div
+        v-for="config in configs"
+        :key="config.project_id"
+        class="rounded-lg border bg-card p-6"
+      >
+        <div class="flex items-start justify-between">
+          <div class="flex items-start gap-4">
+            <div class="rounded-lg bg-primary/10 p-3">
+              <FolderKanban class="h-6 w-6 text-primary" />
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="font-semibold">{{ config.project_name }}</h3>
+                <span
+                  v-if="config.is_active"
+                  class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800"
+                >
+                  Active
+                </span>
+              </div>
+              <p class="text-sm text-muted-foreground">{{ config.project_id }}</p>
+              <div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">
+                <span>v{{ config.version }}</span>
+                <span>Updated {{ formatRelativeTime(config.updated_at) }}</span>
+              </div>
+            </div>
+          </div>
+          
+          <div class="flex items-center gap-2">
+            <button
+              v-if="!config.is_active"
+              @click="activate(config.project_id)"
+              class="rounded-lg border px-3 py-1.5 text-sm hover:bg-accent"
+              :disabled="activating === config.project_id"
+            >
+              {{ activating === config.project_id ? 'Activating...' : 'Activate' }}
+            </button>
+            <RouterLink
+              :to="`/projects/${config.project_id}`"
+              class="rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
+            >
+              View
+            </RouterLink>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
+import { FolderKanban, Plus } from 'lucide-vue-next'
+import { useApiStore } from '@/stores/api'
+import type { ProjectIndex } from '@/types'
+import { formatRelativeTime } from '@/lib/utils'
+
+const apiStore = useApiStore()
+
+const configs = ref<ProjectIndex[]>([])
+const loading = ref(true)
+const seeding = ref(false)
+const activating = ref<string | null>(null)
+
+async function loadProjects() {
+  try {
+    loading.value = true
+    const result = await apiStore.listConfigs()
+    configs.value = result.configs
+  } catch (err) {
+    console.error('Failed to load projects:', err)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function seedProject() {
+  try {
+    seeding.value = true
+    await apiStore.seedConfig(true)
+    await loadProjects()
+  } catch (err) {
+    console.error('Failed to seed project:', err)
+  } finally {
+    seeding.value = false
+  }
+}
+
+async function activate(projectId: string) {
+  try {
+    activating.value = projectId
+    await apiStore.activateConfig(projectId)
+    await loadProjects()
+  } catch (err) {
+    console.error('Failed to activate:', err)
+  } finally {
+    activating.value = null
+  }
+}
+
+onMounted(loadProjects)
+</script>

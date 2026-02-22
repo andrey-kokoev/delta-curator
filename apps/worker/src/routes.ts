@@ -8,6 +8,13 @@ import { D1Committer, R2ArtifactStore, Runner, ConfigStore } from '@delta-curato
 import type { Comparator, Decider } from '@delta-curator/runtime';
 import type { Env } from './env.js';
 import { handleSeed } from './seed.js';
+import { 
+  handleMicrosoftLogin, 
+  handleMicrosoftCallback, 
+  handleLogout, 
+  handleMe,
+  getSession 
+} from './auth/index.js';
 
 /**
  * Stub Comparator for testing
@@ -54,6 +61,23 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
   const method = request.method.toUpperCase();
 
   try {
+    // Auth routes
+    if (pathname === '/api/auth/microsoft' && method === 'GET') {
+      return await handleMicrosoftLogin(request, env);
+    }
+    
+    if (pathname === '/api/auth/microsoft/callback' && method === 'GET') {
+      return await handleMicrosoftCallback(request, env);
+    }
+    
+    if (pathname === '/api/auth/logout' && method === 'POST') {
+      return handleLogout();
+    }
+    
+    if (pathname === '/api/auth/me' && method === 'GET') {
+      return await handleMe(request, env);
+    }
+
     // POST /run — execute one batch
     if (pathname === '/run' && method === 'POST') {
       return await handleRun(request, env);

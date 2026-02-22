@@ -6,10 +6,12 @@
   "type": "module",
   "scripts": {
     "build": "pnpm -r run build",
+    "build:ui": "pnpm -F @delta-curator/ui run build",
+    "dev": "pnpm -F @delta-curator/ui run dev",
+    "dev:worker": "pnpm -F @delta-curator/worker exec wrangler dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "dev": "delta-curator watch",
     "deploy": "pnpm run build && pnpm -F @delta-curator/worker exec wrangler deploy"
   },
   "workspaces": [

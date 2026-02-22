@@ -1,0 +1,110 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/',
+      name: 'home',
+      component: () => import('@/pages/Home.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('@/pages/Login.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
+      path: '/projects',
+      name: 'projects',
+      component: () => import('@/pages/Projects.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/projects/new',
+      name: 'project-new',
+      component: () => import('@/pages/ProjectWizard.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/projects/:id',
+      name: 'project-detail',
+      component: () => import('@/pages/ProjectDetail.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/projects/:id/edit',
+      name: 'project-edit',
+      component: () => import('@/pages/ProjectEdit.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/projects/:id/sources',
+      name: 'project-sources',
+      component: () => import('@/pages/ProjectSources.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/projects/:id/pipeline',
+      name: 'project-pipeline',
+      component: () => import('@/pages/ProjectPipeline.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/content',
+      name: 'content',
+      component: () => import('@/pages/Content.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/search',
+      name: 'search',
+      component: () => import('@/pages/Search.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/run',
+      name: 'run',
+      component: () => import('@/pages/RunControl.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/inspect',
+      name: 'inspect',
+      component: () => import('@/pages/Inspect.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/health',
+      name: 'health',
+      component: () => import('@/pages/Health.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('@/pages/Settings.vue'),
+      meta: { requiresAuth: true }
+    }
+  ]
+})
+
+router.beforeEach(async (to, _from, next) => {
+  const authStore = useAuthStore()
+  
+  if (!authStore.isAuthenticated && !authStore.isLoading) {
+    await authStore.checkAuth()
+  }
+  
+  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+    next('/login')
+  } else if (to.path === '/login' && authStore.isAuthenticated) {
+    next('/')
+  } else {
+    next()
+  }
+})
+
+export default router

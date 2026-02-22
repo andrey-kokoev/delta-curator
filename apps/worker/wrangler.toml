@@ -12,6 +12,12 @@ database_id = "c60bfd61-050d-46bc-9e57-002c73bf1dfe"
 binding = "ARTIFACTS"
 bucket_name = "delta-curator-artifacts"
 
+# Static assets for UI (built from apps/ui)
+# Upload with: wrangler pages publish apps/ui/dist
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "your-sessions-kv-namespace-id"
+
 [ai]
 binding = "AI"
 
@@ -22,3 +28,9 @@ binding = "AI"
 
 [triggers]
 crons = ["0 8 * * *"]
+
+# Required secrets (set via wrangler secret put):
+# - AUTH_SECRET: Random string for session signing
+# - AUTH_MICROSOFT_CLIENT_ID: Azure AD app client ID
+# - AUTH_MICROSOFT_CLIENT_SECRET: Azure AD app client secret
+# - AUTH_MICROSOFT_TENANT_ID: Azure AD tenant ID (or 'common')
