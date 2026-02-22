@@ -1,12 +1,13 @@
 /**
  * Worker Route Handlers
- * Implements POST /run, GET /inspect, GET /search, GET /health
+ * Implements POST /run, GET /inspect, GET /search, GET /health, /config/*
  * Per AGENT_BRIEF2.md section 4
  */
 
-import { D1Committer, R2ArtifactStore, Runner } from '@delta-curator/runtime';
+import { D1Committer, R2ArtifactStore, Runner, ConfigStore } from '@delta-curator/runtime';
 import type { Comparator, Decider } from '@delta-curator/runtime';
 import type { Env } from './env.js';
+import { handleSeed } from './seed.js';
 
 /**
  * Stub Comparator for testing
@@ -71,6 +72,64 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
     // GET /health — health check
     if (pathname === '/health' && method === 'GET') {
       return await handleHealth(request, env);
+    }
+
+    // POST /seed — seed initial config
+    if (pathname === '/seed' && method === 'POST') {
+      return await handleSeed(request, env.DB, env.ARTIFACTS);
+    }
+
+    // Config routes
+    // GET /config — list all configs
+    if (pathname === '/config' && method === 'GET') {
+      return await handleConfigList(request, env);
+    }
+
+    // POST /config — create/update config
+    if (pathname === '/config' && method === 'POST') {
+      return await handleConfigWrite(request, env);
+    }
+
+    // GET /config/active — get active config
+    if (pathname === '/config/active' && method === 'GET') {
+      return await handleConfigGetActive(request, env);
+    }
+
+    // GET /config/:project_id — get specific config
+    if (pathname.startsWith('/config/') && method === 'GET' && !pathname.includes('/versions')) {
+      const parts = pathname.split('/').filter(Boolean);
+      if (parts.length === 2) {
+        const projectId = parts[1];
+        return await handleConfigRead(request, env, projectId);
+      }
+    }
+
+    // GET /config/:project_id/versions — list versions
+    if (pathname.startsWith('/config/') && pathname.endsWith('/versions') && method === 'GET') {
+      const parts = pathname.split('/').filter(Boolean);
+      if (parts.length === 3 && parts[2] === 'versions') {
+        const projectId = parts[1];
+        return await handleConfigListVersions(request, env, projectId);
+      }
+    }
+
+    // POST /config/:project_id/activate — set active config
+    if (pathname.startsWith('/config/') && pathname.endsWith('/activate') && method === 'POST') {
+      const parts = pathname.split('/').filter(Boolean);
+      if (parts.length === 3 && parts[2] === 'activate') {
+        const projectId = parts[1];
+        return await handleConfigActivate(request, env, projectId);
+      }
+    }
+
+    // DELETE /config/:project_id/:version — delete config version
+    if (pathname.startsWith('/config/') && method === 'DELETE') {
+      const parts = pathname.split('/').filter(Boolean);
+      if (parts.length === 3) {
+        const projectId = parts[1];
+        const version = parts[2];
+        return await handleConfigDelete(request, env, projectId, version);
+      }
     }
 
     // Not found
@@ -267,6 +326,258 @@ async function handleHealth(request: Request, env: Env): Promise<Response> {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
       }
+    );
+  }
+}
+
+// ============================================================================
+// Config Routes
+// ============================================================================
+
+/**
+ * GET /config
+ * List all project configs (index only)
+ */
+async function handleConfigList(request: Request, env: Env): Promise<Response> {
+  try {
+    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
+    const result = await store.list();
+
+    if (!result.success) {
+      return new Response(
+        JSON.stringify({ error: result.error }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ configs: result.configs }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * POST /config
+ * Create or update a project config
+ * Body: ProjectConfig object
+ * Query: ?activate=true to also set as active
+ */
+async function handleConfigWrite(request: Request, env: Env): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const activate = url.searchParams.get('activate') === 'true';
+
+    // Parse request body
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON body' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
+
+    // Write config
+    const result = await store.write(body, activate);
+
+    if (!result.success) {
+      return new Response(
+        JSON.stringify({ error: result.error }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        project_id: result.projectId,
+        version: result.version,
+        r2_key: result.r2Key,
+        hash: result.hash,
+        active: activate
+      }),
+      { status: 201, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * GET /config/:project_id
+ * Get a specific project config
+ */
+async function handleConfigRead(request: Request, env: Env, projectId: string): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const version = url.searchParams.get('version');
+
+    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
+
+    const result = version
+      ? await store.readVersion(projectId, version)
+      : await store.read(projectId);
+
+    if (!result.success) {
+      const status = result.error?.includes('not found') ? 404 : 500;
+      return new Response(
+        JSON.stringify({ error: result.error }),
+        { status, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        config: result.config,
+        index: result.index
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * GET /config/:project_id/versions
+ * List all versions for a project
+ */
+async function handleConfigListVersions(request: Request, env: Env, projectId: string): Promise<Response> {
+  try {
+    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
+    const result = await store.listVersions(projectId);
+
+    if (!result.success) {
+      return new Response(
+        JSON.stringify({ error: result.error }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ project_id: projectId, versions: result.configs }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * POST /config/:project_id/activate
+ * Set a config version as active (or latest if no version specified)
+ */
+async function handleConfigActivate(request: Request, env: Env, projectId: string): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const version = url.searchParams.get('version') || undefined;
+
+    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
+    const result = await store.setActive(projectId, version);
+
+    if (!result.success) {
+      const status = result.error?.includes('not found') ? 404 : 500;
+      return new Response(
+        JSON.stringify({ error: result.error }),
+        { status, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        project_id: result.projectId,
+        version: result.version
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * GET /config/active
+ * Get the currently active project config
+ */
+async function handleConfigGetActive(request: Request, env: Env): Promise<Response> {
+  try {
+    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
+    const result = await store.getActive();
+
+    if (!result.success) {
+      const status = result.error?.includes('not found') ? 404 : 500;
+      return new Response(
+        JSON.stringify({ error: result.error }),
+        { status, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        config: result.config,
+        index: result.index
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * DELETE /config/:project_id/:version
+ * Delete a specific config version
+ */
+async function handleConfigDelete(request: Request, env: Env, projectId: string, version: string): Promise<Response> {
+  try {
+    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
+    const result = await store.delete(projectId, version);
+
+    if (!result.success) {
+      return new Response(
+        JSON.stringify({ error: result.error }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        project_id: projectId,
+        version: version,
+        deleted: true
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
 }

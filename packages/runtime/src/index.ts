@@ -17,7 +17,10 @@ declare global {
   }
 
   interface R2Bucket {
-    put(key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }): Promise<any>;
+    put(key: string, value: ArrayBuffer | string, options?: { 
+      httpMetadata?: { contentType?: string },
+      customMetadata?: Record<string, string>
+    }): Promise<any>;
     get(key: string): Promise<any | null>;
     delete(key: string): Promise<void>;
   }
@@ -26,4 +29,5 @@ declare global {
 export * from './interfaces/index.js';
 export * from './commit/index.js';
 export * from './runner/index.js';
+export * from './config/index.js';
 export { R2ArtifactStore } from './artifacts/r2_store.js';

@@ -1,46 +1,20 @@
 {
+  "$schema": "https://delta-curator.local/schemas/config.schema.json",
+  "version": "1.0.0",
+  "project_id": "quickstart-demo",
+  "project_name": "Quickstart Demo Project",
+  
   "topic": {
-    "id": "regeneron-reg-intel-v0",
-    "label": "Regeneron — FDA comms (WL/483/enforcement/recalls)",
-    "company_match": {
-      "mode": "substring_i",
-      "needle": "regeneron"
-    }
+    "id": "demo-topic-v0",
+    "label": "Example topic for demonstration"
   },
 
   "sources": [
     {
-      "id": "fda-warning-letters",
+      "id": "demo-rss-source",
       "plugin": "rss_source",
       "config": {
-        "feed_url": "https://www.fda.gov/safety/medwatch-fda-safety-information-and-adverse-event-reporting-program/medwatch-rss-feed",
-        "user_agent": "delta-curator/0.1",
-        "max_items_per_batch": 50
-      }
-    },
-    {
-      "id": "fda-483",
-      "plugin": "rss_source",
-      "config": {
-        "feed_url": "https://www.fda.gov/safety/medwatch-fda-safety-information-and-adverse-event-reporting-program/medwatch-rss-feed",
-        "user_agent": "delta-curator/0.1",
-        "max_items_per_batch": 50
-      }
-    },
-    {
-      "id": "fda-enforcement-actions",
-      "plugin": "rss_source",
-      "config": {
-        "feed_url": "https://www.fda.gov/safety/medwatch-fda-safety-information-and-adverse-event-reporting-program/medwatch-rss-feed",
-        "user_agent": "delta-curator/0.1",
-        "max_items_per_batch": 50
-      }
-    },
-    {
-      "id": "fda-recalls",
-      "plugin": "rss_source",
-      "config": {
-        "feed_url": "https://www.fda.gov/safety/medwatch-fda-safety-information-and-adverse-event-reporting-program/medwatch-rss-feed",
+        "feed_url": "https://example.com/feed.xml",
         "user_agent": "delta-curator/0.1",
         "max_items_per_batch": 50
       }
@@ -51,7 +25,7 @@
     "normalizer": {
       "plugin": "text_normalizer",
       "config": {
-        "accept_mime_prefixes": ["text/", "application/xhtml+xml", "application/xml", "application/pdf"],
+        "accept_mime_prefixes": ["text/", "application/xhtml+xml", "application/xml"],
         "max_bytes_inline": 1048576
       }
     },
@@ -61,149 +35,20 @@
       "config": {
         "facets": [
           {
-            "name": "company_mention",
+            "name": "keyword_match",
             "kind": "boolean",
-            "pattern": "(?i)regeneron"
-          },
-          {
-            "name": "cfr_citation",
-            "kind": "string",
-            "pattern": "(?i)\\b(\\d+)\\s*CFR\\s*(\\d+(?:\\.\\d+)?)(?:\\s*\\(([^\\)\\s]{1,8})\\))?\\b",
-            "normalize": {
-              "mode": "cfr_section_plus_subsection",
-              "format": "{title} CFR {part}{subsection}",
-              "subsection_format": "({sub})"
-            }
-          },
-
-          {
-            "name": "product_family",
-            "kind": "string_multi",
-            "rules": [
-              {
-                "value": "biologics_monoclonal_antibodies",
-                "any": [
-                  "(?i)\\bmonoclonal antibody\\b",
-                  "(?i)\\bmAb\\b",
-                  "(?i)\\bantibody therapy\\b",
-                  "(?i)\\bIgG\\b",
-                  "(?i)\\bbiologic drug\\b",
-                  "(?i)\\bbiopharmaceutical\\b"
-                ]
-              },
-              {
-                "value": "ophthalmology_injectables",
-                "any": [
-                  "(?i)\\bintravitreal\\b",
-                  "(?i)\\bophthalmic injection\\b",
-                  "(?i)\\bretinal\\b",
-                  "(?i)\\bmacular\\b",
-                  "(?i)\\bocular\\b",
-                  "(?i)\\beye injection\\b"
-                ]
-              },
-              {
-                "value": "sterile_injectables_parenterals",
-                "any": [
-                  "(?i)\\bsterile injectable\\b",
-                  "(?i)\\bparenteral\\b",
-                  "(?i)\\baseptic processing\\b",
-                  "(?i)\\bsterile fill\\b",
-                  "(?i)\\baseptic filling\\b",
-                  "(?i)\\binjectable product\\b"
-                ]
-              },
-              {
-                "value": "cell_therapy",
-                "any": [
-                  "(?i)\\bcell therapy\\b",
-                  "(?i)\\bautologous\\b",
-                  "(?i)\\ballogeneic\\b",
-                  "(?i)\\bCAR-?T\\b",
-                  "(?i)\\bcellular therapy\\b"
-                ]
-              },
-              {
-                "value": "gene_therapy",
-                "any": [
-                  "(?i)\\bgene therapy\\b",
-                  "(?i)\\bgenetic modification\\b",
-                  "(?i)\\btransduction\\b",
-                  "(?i)\\bgene transfer\\b",
-                  "(?i)\\bin vivo gene\\b",
-                  "(?i)\\bex vivo gene\\b"
-                ]
-              },
-              {
-                "value": "viral_vectors_aav_lenti",
-                "any": [
-                  "(?i)\\bAAV\\b",
-                  "(?i)\\badeno-associated virus\\b",
-                  "(?i)\\blentiviral\\b",
-                  "(?i)\\blentivirus\\b",
-                  "(?i)\\bviral vector\\b"
-                ]
-              },
-              {
-                "value": "biologics_manufacturing_cmc",
-                "any": [
-                  "(?i)\\bCMC\\b",
-                  "(?i)\\bprocess validation\\b",
-                  "(?i)\\bcell culture\\b",
-                  "(?i)\\bbioreactor\\b",
-                  "(?i)\\bdownstream processing\\b",
-                  "(?i)\\bupstream processing\\b",
-                  "(?i)\\bpurification\\b"
-                ]
-              },
-              {
-                "value": "cold_chain_biologics",
-                "any": [
-                  "(?i)\\bcold chain\\b",
-                  "(?i)\\brefrigerated\\b",
-                  "(?i)\\b2\\s*[-–]\\s*8\\s*°?C\\b",
-                  "(?i)\\bfrozen storage\\b",
-                  "(?i)\\bcryogenic\\b",
-                  "(?i)\\btemperature excursion\\b"
-                ]
-              }
-            ],
-            "default_if_none": "unknown"
+            "pattern": "(?i)example"
           }
         ],
-
-        "facet_postprocess": {
-          "company": {
-            "from_boolean_facet": "company_mention",
-            "value_if_true": "regeneron",
-            "drop_source_facet": true
-          },
-          "cfr_citations": {
-            "from_multi_facet": "cfr_citation",
-            "dedupe": true,
-            "sort": true,
-            "drop_source_facet": true
-          },
-          "product_family": {
-            "from_multi_facet": "product_family",
-            "dedupe": true,
-            "sort": true
-          }
-        }
+        "facet_postprocess": {}
       }
     },
 
     "resolver": {
       "plugin": "dictionary_resolver",
       "config": {
-        "entities": {
-          "company": {
-            "regeneron": { "kind": "company", "id": "company:regeneron", "label": "Regeneron (mention-based)" }
-          }
-        },
-        "mapping": [
-          { "facet": "company", "value": "regeneron", "entity": "company:regeneron", "confidence": 0.6 }
-        ]
+        "entities": {},
+        "mapping": []
       }
     },
 
@@ -211,11 +56,7 @@
       "plugin": "fingerprint_comparator",
       "config": {
         "deltas": {
-          "new_doc": true,
-          "new_company_cfr_pair": {
-            "company_entity_id": "company:regeneron",
-            "cfr_facet": "cfr_citations"
-          }
+          "new_doc": true
         },
         "neighbors": { "by_fingerprint_k": 5 }
       }
@@ -223,47 +64,29 @@
 
     "ranking": {
       "ingest": {
-        "enabled": true,
-        "backend": "workers_ai_rerank",
-        "model": "@cf/baai/bge-reranker-base",
-        "query": "FDA communications relevant to Regeneron regulatory risk",
-        "max_passage_chars": 4000
+        "enabled": false,
+        "backend": "none"
       },
       "search": {
-        "enabled": true,
-        "backend": "ai_search_rerank",
-        "index": "delta-curator-regeneron",
-        "rerank": true
+        "enabled": false,
+        "backend": "none"
       }
     },
 
     "decider": {
       "plugin": "rules_decider",
       "config": {
-        "requires_company_mention": true,
-        "company_facet": "company",
-        "company_value": "regeneron",
-
         "rules": [
           {
             "when": { "has_delta": "new_doc" },
             "action": "append",
             "score": 0.7,
             "reasons": ["new_doc"]
-          },
-          {
-            "when": { "has_delta": "new_company_cfr_pair" },
-            "action": "hold",
-            "queue": "regeneron-new-cfr",
-            "until_hours": 8760,
-            "score": 0.9,
-            "reasons": ["new_company_cfr_pair"]
           }
         ],
-
         "default_action": "reject",
         "default_score": 0.1,
-        "default_reasons": ["no_novelty_or_not_in_scope"]
+        "default_reasons": ["no_novelty"]
       }
     },
 
@@ -283,19 +106,25 @@
 
   "storage": {
     "committer": {
-      "plugin": "sqlite_committer",
+      "plugin": "d1_committer",
       "config": {
-        "sqlite_path": "./kb/regeneron-delta-curator.sqlite"
+        "database": "DB"
       }
     },
     "artifacts": {
-      "kind": "filesystem",
-      "base_dir": "./kb/artifacts"
+      "kind": "r2",
+      "bucket": "ARTIFACTS",
+      "prefix": "delta-curator/"
     }
   },
 
   "runtime": {
     "max_items_per_batch": 50,
     "clock": { "mode": "system" }
+  },
+
+  "schedules": {
+    "enabled": false,
+    "sources": []
   }
 }

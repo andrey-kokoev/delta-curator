@@ -44,3 +44,4 @@ artifacts/
 *.tmp
 *.temp
 .turbo/
+.opencode

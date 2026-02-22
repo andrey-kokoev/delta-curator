@@ -107,4 +107,19 @@ CREATE TABLE IF NOT EXISTS curated_docs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_curated_source_item ON curated_docs(source_item_id);
+
+-- Project configuration index (D1 stores index, R2 stores full object)
+CREATE TABLE IF NOT EXISTS project_configs (
+  project_id TEXT PRIMARY KEY,
+  version TEXT NOT NULL,
+  project_name TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT 0,
+  r2_key TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_configs_active ON project_configs(is_active);
+CREATE INDEX IF NOT EXISTS idx_project_configs_updated ON project_configs(updated_at);
 `;
