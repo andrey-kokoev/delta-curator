@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@cloudflare/kv-asset-handler": "^0.4.2",
     "@delta-curator/protocol": "workspace:*",
     "@delta-curator/runtime": "workspace:*"
   },

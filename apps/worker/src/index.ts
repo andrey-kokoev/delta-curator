@@ -6,53 +6,47 @@
 
 import { handleFetch } from './routes.js';
 import type { Env } from './env.js';
+import { getAssetFromKV } from '@cloudflare/kv-asset-handler';
 
 /**
- * Serve UI static assets from ASSETS binding
+ * Serve UI static assets using Workers Sites
  */
 async function serveUI(request: Request, env: Env): Promise<Response> {
-  // Try to serve the requested asset
-  const url = new URL(request.url);
-  let path = url.pathname;
-  
-  // Handle client-side routing - serve index.html for non-asset paths
-  if (!path.includes('.') || path === '/') {
-    path = '/index.html';
-  }
-  
   try {
-    // Clone request with modified URL for ASSETS
-    const assetRequest = new Request(new URL(path, url.origin), request);
-    const response = await env.ASSETS.fetch(assetRequest);
-    
-    if (response.status === 200) {
-      // Add appropriate content type headers
-      const headers = new Headers(response.headers);
-      
-      if (path.endsWith('.js')) {
-        headers.set('Content-Type', 'application/javascript');
-      } else if (path.endsWith('.css')) {
-        headers.set('Content-Type', 'text/css');
-      } else if (path.endsWith('.html')) {
-        headers.set('Content-Type', 'text/html');
-        // Add no-cache for HTML to ensure fresh app loads
-        headers.set('Cache-Control', 'no-cache');
+    return await getAssetFromKV(
+      {
+        request,
+        waitUntil: (promise: Promise<any>) => promise,
+      },
+      {
+        ASSET_NAMESPACE: env.__STATIC_CONTENT,
+        ASSET_MANIFEST: env.__STATIC_CONTENT_MANIFEST,
+        mapRequestToAsset: (req: Request) => {
+          const url = new URL(req.url);
+          // Handle client-side routing - serve index.html for non-asset paths
+          if (!url.pathname.includes('.') || url.pathname === '/') {
+            url.pathname = '/index.html';
+          }
+          return new Request(url.toString(), req);
+        },
       }
-      
-      return new Response(response.body, {
-        status: response.status,
-        headers
-      });
+    );
+  } catch (e) {
+    // If asset not found, serve index.html for SPA routing
+    try {
+      return await getAssetFromKV(
+        {
+          request: new Request(new URL('/index.html', request.url)),
+          waitUntil: (promise: Promise<any>) => promise,
+        },
+        {
+          ASSET_NAMESPACE: env.__STATIC_CONTENT,
+          ASSET_MANIFEST: env.__STATIC_CONTENT_MANIFEST,
+        }
+      );
+    } catch {
+      return new Response('Not found', { status: 404 });
     }
-    
-    return response;
-  } catch {
-    // Fall back to index.html for SPA routing
-    if (path !== '/index.html') {
-      const indexRequest = new Request(new URL('/index.html', url.origin), request);
-      return env.ASSETS.fetch(indexRequest);
-    }
-    return new Response('Not found', { status: 404 });
   }
 }
 

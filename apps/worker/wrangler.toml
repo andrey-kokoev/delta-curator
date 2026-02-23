@@ -12,8 +12,11 @@ database_id = "c60bfd61-050d-46bc-9e57-002c73bf1dfe"
 binding = "ARTIFACTS"
 bucket_name = "delta-curator-artifacts"
 
-# Static assets for UI (built from apps/ui)
-# Upload with: wrangler pages publish apps/ui/dist
+# Static assets using Workers Sites (more stable)
+[site]
+bucket = "../ui/dist"
+
+# Session KV (optional, can use D1 instead)
 [[kv_namespaces]]
 binding = "SESSIONS"
 id = "your-sessions-kv-namespace-id"

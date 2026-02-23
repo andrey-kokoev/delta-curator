@@ -15,7 +15,10 @@ export interface Env {
   DB: D1Database;
   ARTIFACTS: R2Bucket;
   AI: Ai;
-  ASSETS: Fetcher;
+  
+  // Workers Sites bindings for UI assets
+  __STATIC_CONTENT: KVNamespace;
+  __STATIC_CONTENT_MANIFEST: string;
   
   // Auth
   AUTH_SECRET: string;

@@ -97,6 +97,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@cloudflare/kv-asset-handler':
+        specifier: ^0.4.2
+        version: 0.4.2
       '@delta-curator/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
