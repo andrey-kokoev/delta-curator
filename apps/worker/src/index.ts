@@ -1,93 +1,119 @@
 /**
  * Delta-Curator Worker
- * Cloudflare Workers entrypoint with fetch() and scheduled() handlers
- * Serves both API and UI (Vue.js SPA)
+ * Serves API and UI (Vue.js SPA)
  */
 
-import { handleFetch } from './routes.js';
-import type { Env } from './env.js';
-import { getAssetFromKV } from '@cloudflare/kv-asset-handler';
+import type { Env } from './env';
 
-/**
- * Serve UI static assets using Workers Sites
- */
-async function serveUI(request: Request, env: Env): Promise<Response> {
+// Simple API handlers inline
+async function handleHealth(env: Env): Promise<Response> {
   try {
-    return await getAssetFromKV(
-      {
-        request,
-        waitUntil: (promise: Promise<any>) => promise,
-      },
-      {
-        ASSET_NAMESPACE: env.__STATIC_CONTENT,
-        ASSET_MANIFEST: env.__STATIC_CONTENT_MANIFEST,
-        mapRequestToAsset: (req: Request) => {
-          const url = new URL(req.url);
-          // Handle client-side routing - serve index.html for non-asset paths
-          if (!url.pathname.includes('.') || url.pathname === '/') {
-            url.pathname = '/index.html';
-          }
-          return new Request(url.toString(), req);
-        },
-      }
-    );
-  } catch (e) {
-    // If asset not found, serve index.html for SPA routing
-    try {
-      return await getAssetFromKV(
-        {
-          request: new Request(new URL('/index.html', request.url)),
-          waitUntil: (promise: Promise<any>) => promise,
-        },
-        {
-          ASSET_NAMESPACE: env.__STATIC_CONTENT,
-          ASSET_MANIFEST: env.__STATIC_CONTENT_MANIFEST,
-        }
-      );
-    } catch {
-      return new Response('Not found', { status: 404 });
-    }
+    const lastCommit = await env.DB
+      .prepare('SELECT commit_id FROM commits ORDER BY rowid DESC LIMIT 1')
+      .first<{ commit_id: string }>();
+    
+    return new Response(JSON.stringify({
+      ok: true,
+      version: '0.1.0',
+      last_commit_id: lastCommit?.commit_id
+    }), { headers: { 'Content-Type': 'application/json' }});
+  } catch (err) {
+    return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }
 
-/**
- * Check if request should be handled by API or UI
- */
-function isApiRequest(url: URL): boolean {
-  return url.pathname.startsWith('/api/') ||
-         url.pathname.startsWith('/auth/') ||
-         url.pathname.startsWith('/config') ||
-         url.pathname.startsWith('/run') ||
-         url.pathname.startsWith('/inspect') ||
-         url.pathname.startsWith('/search') ||
-         url.pathname.startsWith('/health') ||
-         url.pathname.startsWith('/seed') ||
-         url.pathname.startsWith('/test') ||
-         url.pathname === '/login' ||
-         url.pathname === '/logout';
+async function handleConfigList(env: Env): Promise<Response> {
+  try {
+    const result = await env.DB
+      .prepare('SELECT * FROM project_configs ORDER BY updated_at DESC')
+      .all();
+    return new Response(JSON.stringify({ configs: result.results }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: String(err) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function handleSeed(env: Env): Promise<Response> {
+  // Minimal seed - just create a basic config
+  return new Response(JSON.stringify({ success: true, message: 'Seed endpoint - implement with ConfigStore' }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const pathname = url.pathname.toLowerCase();
+    const method = request.method.toUpperCase();
     
-    // Route API requests to API handler
-    if (isApiRequest(url)) {
-      return handleFetch(request, env);
+    // API routes
+    if (pathname === '/health' && method === 'GET') {
+      return handleHealth(env);
     }
     
-    // Serve UI for all other routes
-    return serveUI(request, env);
+    if (pathname === '/config' && method === 'GET') {
+      return handleConfigList(env);
+    }
+    
+    if (pathname === '/seed' && method === 'POST') {
+      return handleSeed(env);
+    }
+    
+    // CORS for API
+    if (pathname.startsWith('/api/')) {
+      return new Response(JSON.stringify({ error: 'Not implemented' }), {
+        status: 501,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type'
+        }
+      });
+    }
+    
+    // Serve UI from Workers Sites KV
+    const path = url.pathname === '/' || !url.pathname.includes('.') 
+      ? 'index.html' 
+      : url.pathname.slice(1);
+    
+    try {
+      const obj = await env.__STATIC_CONTENT.get(path);
+      if (!obj) {
+        // SPA fallback
+        const index = await env.__STATIC_CONTENT.get('index.html');
+        if (!index) return new Response('Not found', { status: 404 });
+        return new Response(index as any, { 
+          headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' } 
+        });
+      }
+      
+      const ct = path.endsWith('.js') ? 'application/javascript' :
+                 path.endsWith('.css') ? 'text/css' :
+                 path.endsWith('.html') ? 'text/html' :
+                 path.endsWith('.svg') ? 'image/svg+xml' :
+                 'application/octet-stream';
+      
+      const headers: Record<string, string> = { 'Content-Type': ct };
+      if (path.endsWith('.html')) {
+        headers['Cache-Control'] = 'no-cache';
+      }
+      
+      return new Response(obj as any, { headers });
+    } catch (e) {
+      return new Response('Error: ' + String(e), { status: 500 });
+    }
   },
 
-  async scheduled(_event: any, env: Env): Promise<void> {
-    try {
-      // Call the run endpoint for scheduled execution
-      const url = new URL('https://worker/run');
-      url.searchParams.set('once', 'true');
-      await handleFetch(new Request(url, { method: 'POST' }), env);
-    } catch (err) {
-      console.error(`Scheduled batch failed: ${err}`);
-    }
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    console.log('Scheduled event triggered');
   }
 };

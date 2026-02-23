@@ -12,14 +12,9 @@ database_id = "c60bfd61-050d-46bc-9e57-002c73bf1dfe"
 binding = "ARTIFACTS"
 bucket_name = "delta-curator-artifacts"
 
-# Static assets using Workers Sites (more stable)
+# Static assets using Workers Sites
 [site]
 bucket = "../ui/dist"
-
-# Session KV (optional, can use D1 instead)
-[[kv_namespaces]]
-binding = "SESSIONS"
-id = "your-sessions-kv-namespace-id"
 
 [ai]
 binding = "AI"
@@ -37,3 +32,7 @@ crons = ["0 8 * * *"]
 # - AUTH_MICROSOFT_CLIENT_ID: Azure AD app client ID
 # - AUTH_MICROSOFT_CLIENT_SECRET: Azure AD app client secret
 # - AUTH_MICROSOFT_TENANT_ID: Azure AD tenant ID (or 'common')
+#
+# Optional: Create a KV namespace for sessions if needed:
+# wrangler kv:namespace create SESSIONS
+# Then add: [[kv_namespaces]] binding = "SESSIONS" id = "<id-from-above>"
