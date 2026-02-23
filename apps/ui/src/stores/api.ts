@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { useAuthStore } from './auth'
 import type { 
   ProjectConfig, 
   ProjectIndex, 
@@ -15,17 +16,25 @@ export const useApiStore = defineStore('api', () => {
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
+  function getAuthHeaders(): Record<string, string> {
+    const authStore = useAuthStore()
+    return authStore.getAuthHeaders()
+  }
+
   async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
     isLoading.value = true
     error.value = null
     
     try {
       const url = `${API_BASE}${path}`
+      const authHeaders = getAuthHeaders()
+      
       const response = await fetch(url, {
         ...options,
-        credentials: 'include', // Include cookies for auth
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeaders,
           ...options?.headers
         }
       })
@@ -104,8 +113,10 @@ export const useApiStore = defineStore('api', () => {
   }
 
   async function inspect(since = 'PT24H', format: 'markdown' | 'json' = 'markdown'): Promise<string | { markdown: string }> {
+    const authHeaders = getAuthHeaders()
     const response = await fetch(`${API_BASE}/inspect?since=${since}&format=${format}`, {
-      credentials: 'include'
+      credentials: 'include',
+      headers: authHeaders
     })
     if (format === 'markdown') {
       return response.text()

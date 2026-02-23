@@ -295,6 +295,111 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
 }
 
 // ============================================================================
+// Auth - Admin Token (Bearer)
+// ============================================================================
+
+async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
+  try {
+    const body = await request.json() as { token?: string };
+    const providedToken = body.token;
+    
+    if (!providedToken) {
+      return new Response(JSON.stringify({ error: 'Token required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (providedToken !== env.ADMIN_TOKEN) {
+      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Create admin user session
+    const user: User = {
+      id: 'admin',
+      email: 'admin@delta-curator.local',
+      name: 'Administrator',
+      roles: ['admin']
+    };
+    
+    const session: Session = {
+      user,
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
+    };
+    
+    const token = await signSession(session, env.AUTH_SECRET);
+    
+    const response = new Response(JSON.stringify({ 
+      success: true, 
+      user,
+      token // Return token for localStorage storage
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    return setSessionCookie(response, token);
+  } catch (err) {
+    return new Response(JSON.stringify({ error: 'Login failed: ' + (err as Error).message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function handleAdminTokenAuth(request: Request, env: Env): Promise<Response> {
+  try {
+    const authHeader = request.headers.get('Authorization');
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return new Response(JSON.stringify({ error: 'Bearer token required' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    const providedToken = authHeader.slice(7); // Remove 'Bearer ' prefix
+    
+    if (providedToken !== env.ADMIN_TOKEN) {
+      return new Response(JSON.stringify({ error: 'Invalid token' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Create admin user session
+    const user: User = {
+      id: 'admin',
+      email: 'admin@delta-curator.local',
+      name: 'Administrator',
+      roles: ['admin']
+    };
+    
+    const session: Session = {
+      user,
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
+    };
+    
+    const token = await signSession(session, env.AUTH_SECRET);
+    
+    return new Response(JSON.stringify({ 
+      success: true, 
+      user,
+      token
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: 'Auth failed: ' + (err as Error).message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// ============================================================================
 // Config Store Implementation
 // ============================================================================
 
@@ -926,6 +1031,15 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   
   if (pathname === '/api/auth/me' && method === 'GET') {
     return handleMe(request, env);
+  }
+  
+  // Admin auth routes
+  if (pathname === '/api/auth/admin' && method === 'POST') {
+    return handleAdminLogin(request, env);
+  }
+  
+  if (pathname === '/api/auth/admin/token' && method === 'POST') {
+    return handleAdminTokenAuth(request, env);
   }
   
   // Config routes

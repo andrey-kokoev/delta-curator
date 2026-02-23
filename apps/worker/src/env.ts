@@ -23,4 +23,7 @@ export interface Env {
   
   // CORS
   UI_URL: string;
+  
+  // Admin token for Bearer auth
+  ADMIN_TOKEN: string;
 }

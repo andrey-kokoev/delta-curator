@@ -29,3 +29,4 @@ crons = ["0 8 * * *"]
 # - AUTH_MICROSOFT_CLIENT_SECRET: Azure AD app client secret
 # - AUTH_MICROSOFT_TENANT_ID: Azure AD tenant ID (or 'common')
 # - UI_URL: URL of the Cloudflare Pages deployment (for CORS)
+# - ADMIN_TOKEN: Bearer token for admin access (e.g., 'admin-secret-token-123')

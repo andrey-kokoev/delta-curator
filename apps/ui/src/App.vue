@@ -18,6 +18,7 @@ import Navigation from '@/components/Navigation.vue'
 const authStore = useAuthStore()
 
 onMounted(() => {
-  authStore.checkAuth()
+  // Initialize auth from localStorage (rehydrate session)
+  authStore.initFromStorage()
 })
 </script>
