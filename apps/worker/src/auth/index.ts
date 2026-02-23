@@ -238,7 +238,7 @@ export async function handleMicrosoftCallback(request: Request, env: Env): Promi
     // Redirect to app with session
     const response = new Response(null, {
       status: 302,
-      headers: { 'Location': '/' }
+      headers: { 'Location': env.UI_URL || '/' }
     });
     
     return setSession(response, session, env);

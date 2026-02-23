@@ -12,7 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "deploy": "pnpm run build && pnpm -F @delta-curator/worker exec wrangler deploy"
+    "deploy": "pnpm run build && pnpm run deploy:api && pnpm run deploy:ui",
+    "deploy:api": "pnpm -F @delta-curator/worker exec wrangler deploy",
+    "deploy:ui": "pnpm run build:ui && wrangler pages deploy apps/ui/dist --project-name=delta-curator-ui --branch=main"
   },
   "workspaces": [
     "packages/*",

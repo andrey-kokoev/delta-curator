@@ -8,17 +8,22 @@ import type {
   RunResult 
 } from '@/types'
 
+// API base URL from environment
+const API_BASE = import.meta.env.VITE_API_URL || ''
+
 export const useApiStore = defineStore('api', () => {
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
-  async function fetchApi<T>(url: string, options?: RequestInit): Promise<T> {
+  async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
     isLoading.value = true
     error.value = null
     
     try {
+      const url = `${API_BASE}${path}`
       const response = await fetch(url, {
         ...options,
+        credentials: 'include', // Include cookies for auth
         headers: {
           'Content-Type': 'application/json',
           ...options?.headers
@@ -45,8 +50,8 @@ export const useApiStore = defineStore('api', () => {
   }
 
   async function getConfig(projectId: string, version?: string): Promise<{ config: ProjectConfig; index: ProjectIndex }> {
-    const url = version ? `/config/${projectId}?version=${version}` : `/config/${projectId}`
-    return fetchApi(url)
+    const path = version ? `/config/${projectId}?version=${version}` : `/config/${projectId}`
+    return fetchApi(path)
   }
 
   async function getActiveConfig(): Promise<{ config: ProjectConfig; index: ProjectIndex }> {
@@ -72,10 +77,10 @@ export const useApiStore = defineStore('api', () => {
     project_id: string
     version?: string
   }> {
-    const url = version 
+    const path = version 
       ? `/config/${projectId}/activate?version=${version}` 
       : `/config/${projectId}/activate`
-    return fetchApi(url, { method: 'POST' })
+    return fetchApi(path, { method: 'POST' })
   }
 
   async function deleteConfig(projectId: string, version: string): Promise<{ 
@@ -99,7 +104,9 @@ export const useApiStore = defineStore('api', () => {
   }
 
   async function inspect(since = 'PT24H', format: 'markdown' | 'json' = 'markdown'): Promise<string | { markdown: string }> {
-    const response = await fetch(`/inspect?since=${since}&format=${format}`)
+    const response = await fetch(`${API_BASE}/inspect?since=${since}&format=${format}`, {
+      credentials: 'include'
+    })
     if (format === 'markdown') {
       return response.text()
     }
