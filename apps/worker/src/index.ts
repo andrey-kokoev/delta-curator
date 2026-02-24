@@ -5,6 +5,8 @@
 
 import type { Env } from './env';
 import type { ProjectConfig, ProjectConfigIndex } from '@delta-curator/protocol';
+import { RSSSource } from './sources/rss';
+import { FingerprintComparator, RulesDecider, SimpleMerger } from './plugins';
 
 // ============================================================================
 // Types
@@ -413,7 +415,21 @@ function generateR2Key(projectId: string, version: string, prefix = 'configs/'):
 }
 
 function canonicalJson(obj: unknown): string {
-  return JSON.stringify(obj, Object.keys(obj as object).sort());
+  // Recursively sort keys for canonical JSON representation
+  const sortKeys = (value: unknown): unknown => {
+    if (value === null || typeof value !== 'object') {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.map(sortKeys);
+    }
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value).sort()) {
+      sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  };
+  return JSON.stringify(sortKeys(obj));
 }
 
 function validateProjectConfig(config: unknown): { success: boolean; data?: ProjectConfig; error?: string } {
@@ -795,15 +811,306 @@ async function handleSeedRoute(env: Env): Promise<Response> {
 }
 
 async function handleRunRoute(env: Env, request: Request): Promise<Response> {
-  // Stub - implement with actual Runner
-  return new Response(JSON.stringify({ 
-    commit_id: null, 
-    items_processed: 0, 
-    events_written: 0,
-    trace_id: 'stub-trace'
-  }), {
-    headers: { 'Content-Type': 'application/json' }
-  });
+  const startTime = Date.now();
+  const url = new URL(request.url);
+  const sourceId = url.searchParams.get('source_id');
+  const maxItems = parseInt(url.searchParams.get('max_items') || '10', 10);
+  
+  // Get active config
+  const configResult = await getActiveConfig(env);
+  if (configResult.error || !configResult.config) {
+    return new Response(JSON.stringify({ error: configResult.error || 'No active config' }), { 
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+  
+  const config = configResult.config;
+  
+  // Find source config
+  const sourceConfig = config.sources.find((s) => 
+    sourceId ? s.id === sourceId : true
+  );
+  
+  if (!sourceConfig) {
+    return new Response(JSON.stringify({ 
+      error: 'No source found',
+      available_sources: config.sources.map((s) => s.id)
+    }), { 
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+  
+  // Create source based on plugin type
+  let source;
+  const pluginType = sourceConfig.plugin;
+  const sourceConfigData = (sourceConfig.config || {}) as Record<string, unknown>;
+  
+  if (pluginType === 'rss_source' || pluginType === 'rss' || pluginType === 'hacker-news') {
+    source = new RSSSource({
+      feed_url: (sourceConfigData.feed_url as string) || 'https://hnrss.org/frontpage',
+      user_agent: 'Delta-Curator/1.0'
+    });
+  } else {
+    return new Response(JSON.stringify({ 
+      error: `Unsupported source plugin: ${pluginType}` 
+    }), { 
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+  
+  // Create plugins
+  const comparator = new FingerprintComparator();
+  const decider = new RulesDecider();
+  
+  // Generate trace ID
+  const traceId = crypto.randomUUID();
+  
+  try {
+    // Get source state
+    const { results: stateResults } = await env.DB.prepare(
+      'SELECT state FROM source_state WHERE source_id = ?'
+    ).bind(sourceConfig.id).all<{ state: string }>();
+    
+    const sourceState = stateResults[0]?.state ? JSON.parse(stateResults[0].state) : {};
+    
+    // Read batch from source
+    const batchResult = await source.readBatch(sourceState, maxItems);
+    
+    if (!batchResult || batchResult.items.length === 0) {
+      return new Response(JSON.stringify({ 
+        commit_id: null,
+        trace_id: traceId,
+        items_processed: 0,
+        events_written: 0,
+        message: 'No new items to process'
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    const items = batchResult.items;
+    
+    // Process each item
+    const events: any[] = [];
+    const now = new Date().toISOString();
+    
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const payload = item.payload as Record<string, unknown>;
+      
+      // Generate event ID (simplified - should use proper dual-hash)
+      const eventId = btoa(`${item.source_item_id}:${payload.title || ''}`).slice(0, 43);
+      
+      // Check for existing event
+      const existing = await env.DB.prepare(
+        'SELECT event_id FROM events WHERE event_id = ?'
+      ).bind(eventId).first();
+      
+      if (existing) {
+        continue; // Skip duplicate
+      }
+      
+      // Prepare candidate doc
+      const candidateDoc = {
+        trace_id: traceId,
+        source_item_id: item.source_item_id,
+        candidate_seq: i,
+        observed_at: now,
+        payload: item.payload
+      };
+      
+      // Get fingerprints for comparison
+      const { results: fingerprints } = await env.DB.prepare(
+        'SELECT fingerprint as payload_hash, event_id FROM fingerprint_index LIMIT 1000'
+      ).all<{ payload_hash: string; event_id: string }>();
+      
+      // Build base views
+      const baseViews = [{
+        viewName: 'fingerprint_index',
+        state: { fingerprints: fingerprints || [] }
+      }];
+      
+      // Compare with existing documents
+      const compareResult = await comparator.compare(candidateDoc, baseViews);
+      
+      // Make decision
+      const decision = await decider.decide(candidateDoc, compareResult);
+      
+      // Only process if append (accept)
+      if (decision.decision !== 'append') {
+        continue;
+      }
+      
+      // Create event
+      const payloadHash = btoa(JSON.stringify(item.payload)).slice(0, 43);
+      const event = {
+        event_type: 'doc_observed',
+        event_version: '1.0',
+        event_id: eventId,
+        payload_hash: payloadHash,
+        hash_alg: 'dc-v1-semcore' as const,
+        trace_id: traceId,
+        source_id: sourceConfig.id,
+        source_item_id: item.source_item_id,
+        candidate_seq: i,
+        observed_at: now,
+        payload: item.payload
+      };
+      
+      events.push(event);
+    }
+    
+    if (events.length === 0) {
+      // Update source state even if no new events
+      await env.DB.prepare(
+        `INSERT INTO source_state (source_id, state, updated_at) 
+         VALUES (?, ?, ?)
+         ON CONFLICT(source_id) DO UPDATE SET 
+           state = excluded.state,
+           updated_at = excluded.updated_at`
+      ).bind(
+        sourceConfig.id,
+        JSON.stringify(batchResult.newState),
+        now
+      ).run();
+      
+      return new Response(JSON.stringify({ 
+        commit_id: null,
+        trace_id: traceId,
+        items_processed: items.length,
+        events_written: 0,
+        message: 'No novel items to commit'
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Generate commit ID
+    const commitId = crypto.randomUUID();
+    
+    // Write events to D1
+    for (const event of events) {
+      await env.DB.prepare(
+        `INSERT INTO events 
+         (event_id, commit_id, event_type, event_version, payload_hash, trace_id, 
+          source_id, source_item_id, candidate_seq, observed_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        event.event_id,
+        commitId,
+        event.event_type,
+        event.event_version,
+        event.payload_hash,
+        event.trace_id,
+        event.source_id,
+        event.source_item_id,
+        event.candidate_seq,
+        event.observed_at,
+        JSON.stringify(event.payload)
+      ).run();
+      
+      // Index facets if present
+      if (event.payload.facets) {
+        for (const facet of event.payload.facets) {
+          await env.DB.prepare(
+            `INSERT INTO facet_index 
+             (event_id, facet_type, facet_value, confidence)
+             VALUES (?, ?, ?, ?)`
+          ).bind(
+            event.event_id,
+            facet.type,
+            facet.value,
+            facet.confidence || 1.0
+          ).run();
+        }
+      }
+      
+      // Index fingerprint
+      await env.DB.prepare(
+        `INSERT INTO fingerprint_index 
+         (event_id, fingerprint, algorithm, created_at)
+         VALUES (?, ?, ?, ?)`
+      ).bind(
+        event.event_id,
+        event.payload_hash,
+        'simhash-v1',
+        now
+      ).run();
+      
+      // Add to curated_docs
+      const payload = event.payload as any;
+      await env.DB.prepare(
+        `INSERT INTO curated_docs 
+         (doc_id, event_id, content_hash, rank_score, source_url, title, 
+          summary, entities, published_at, fetched_at, held, held_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        crypto.randomUUID(),
+        event.event_id,
+        event.payload_hash,
+        0.5, // Default rank_score
+        payload.link || payload.url || '',
+        payload.title || 'Untitled',
+        payload.description || '',
+        JSON.stringify([]),
+        payload.pubDate || now,
+        now,
+        0,
+        null
+      ).run();
+    }
+    
+    // Create commit record
+    await env.DB.prepare(
+      `INSERT INTO commits 
+       (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      commitId,
+      traceId,
+      sourceConfig.id,
+      JSON.stringify(batchResult.newState),
+      items.length,
+      events.length,
+      now
+    ).run();
+    
+    // Update source state
+    await env.DB.prepare(
+      `INSERT INTO source_state (source_id, state, updated_at) 
+       VALUES (?, ?, ?)
+       ON CONFLICT(source_id) DO UPDATE SET 
+         state = excluded.state,
+         updated_at = excluded.updated_at`
+    ).bind(
+      sourceConfig.id,
+      JSON.stringify(batchResult.newState),
+      now
+    ).run();
+    
+    return new Response(JSON.stringify({ 
+      commit_id: commitId,
+      trace_id: traceId,
+      items_processed: items.length,
+      events_written: events.length,
+      source_id: sourceConfig.id,
+      took_ms: Date.now() - startTime
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+  } catch (error: any) {
+    return new Response(JSON.stringify({ 
+      error: error.message || 'Run failed',
+      trace_id: traceId
+    }), { 
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
 }
 
 async function handleInspectRoute(env: Env, request: Request): Promise<Response> {
@@ -832,21 +1139,86 @@ Generated at ${new Date().toISOString()}
 }
 
 async function handleSearchRoute(env: Env, request: Request): Promise<Response> {
+  const startTime = Date.now();
   const url = new URL(request.url);
   const q = url.searchParams.get('q') || '';
-  const k = parseInt(url.searchParams.get('k') || '20');
+  const k = parseInt(url.searchParams.get('k') || '20', 10);
   const rerank = url.searchParams.get('rerank') === 'true';
   
-  return new Response(JSON.stringify({ 
-    query: q, 
-    k, 
-    rerank, 
-    docs: [], 
-    total: 0, 
-    took_ms: 0 
-  }), {
-    headers: { 'Content-Type': 'application/json' }
-  });
+  try {
+    let docs: any[] = [];
+    
+    if (q) {
+      // Search in curated_docs by title, summary, or source_url
+      const result = await env.DB.prepare(
+        `SELECT * FROM curated_docs 
+         WHERE title LIKE ? OR summary LIKE ? OR source_url LIKE ?
+         ORDER BY rank_score DESC, fetched_at DESC
+         LIMIT ?`
+      ).bind(`%${q}%`, `%${q}%`, `%${q}%`, k).all();
+      
+      docs = (result.results || []).map((row: any) => ({
+        doc_id: row.doc_id,
+        event_id: row.event_id,
+        title: row.title,
+        summary: row.summary,
+        source_url: row.source_url,
+        rank_score: row.rank_score,
+        published_at: row.published_at,
+        fetched_at: row.fetched_at,
+        held: row.held === 1,
+        held_until: row.held_until,
+        entities: row.entities ? JSON.parse(row.entities) : []
+      }));
+    } else {
+      // Return all docs ordered by rank score
+      const result = await env.DB.prepare(
+        `SELECT * FROM curated_docs 
+         ORDER BY rank_score DESC, fetched_at DESC 
+         LIMIT ?`
+      ).bind(k).all();
+      
+      docs = (result.results || []).map((row: any) => ({
+        doc_id: row.doc_id,
+        event_id: row.event_id,
+        title: row.title,
+        summary: row.summary,
+        source_url: row.source_url,
+        rank_score: row.rank_score,
+        published_at: row.published_at,
+        fetched_at: row.fetched_at,
+        held: row.held === 1,
+        held_until: row.held_until,
+        entities: row.entities ? JSON.parse(row.entities) : []
+      }));
+    }
+    
+    const tookMs = Date.now() - startTime;
+    
+    return new Response(JSON.stringify({ 
+      query: q, 
+      k, 
+      rerank, 
+      docs, 
+      total: docs.length, 
+      took_ms: tookMs 
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (err: any) {
+    return new Response(JSON.stringify({ 
+      error: `Search failed: ${err.message || err}`,
+      query: q,
+      k,
+      rerank,
+      docs: [],
+      total: 0,
+      took_ms: Date.now() - startTime
+    }), { 
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
 }
 
 async function handleHealthRoute(env: Env): Promise<Response> {
@@ -877,14 +1249,15 @@ async function handleHealthRoute(env: Env): Promise<Response> {
 const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS commits (
   commit_id TEXT PRIMARY KEY,
-  commit_key TEXT NOT NULL UNIQUE,
   trace_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
-  old_state TEXT NOT NULL,
-  new_state TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  source_state TEXT NOT NULL,
+  item_count INTEGER NOT NULL DEFAULT 0,
+  event_count INTEGER NOT NULL DEFAULT 0,
+  committed_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_commits_source_trace ON commits(source_id, trace_id);
+CREATE INDEX IF NOT EXISTS idx_commits_time ON commits(committed_at);
 
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
@@ -917,10 +1290,7 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_commit ON artifacts(commit_id);
 CREATE TABLE IF NOT EXISTS source_state (
   source_id TEXT PRIMARY KEY,
   state TEXT NOT NULL,
-  last_commit_id TEXT NOT NULL,
-  last_commit_key TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY (last_commit_id) REFERENCES commits(commit_id)
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS facet_index (
@@ -952,12 +1322,22 @@ CREATE INDEX IF NOT EXISTS idx_hold_source_item ON hold_index(source_item_id);
 
 CREATE TABLE IF NOT EXISTS curated_docs (
   doc_id TEXT PRIMARY KEY,
-  source_item_id TEXT NOT NULL,
-  payload TEXT NOT NULL,
-  last_event_id TEXT NOT NULL,
-  FOREIGN KEY (last_event_id) REFERENCES events(event_id)
+  event_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  rank_score REAL NOT NULL DEFAULT 0,
+  source_url TEXT,
+  title TEXT,
+  summary TEXT,
+  entities TEXT, -- JSON array
+  published_at TEXT,
+  fetched_at TEXT NOT NULL,
+  held INTEGER NOT NULL DEFAULT 0,
+  held_until TEXT,
+  FOREIGN KEY (event_id) REFERENCES events(event_id)
 );
-CREATE INDEX IF NOT EXISTS idx_curated_source_item ON curated_docs(source_item_id);
+CREATE INDEX IF NOT EXISTS idx_curated_event ON curated_docs(event_id);
+CREATE INDEX IF NOT EXISTS idx_curated_rank ON curated_docs(rank_score DESC);
+CREATE INDEX IF NOT EXISTS idx_curated_held ON curated_docs(held, held_until);
 
 CREATE TABLE IF NOT EXISTS project_configs (
   project_id TEXT PRIMARY KEY,
