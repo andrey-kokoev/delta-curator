@@ -5,6 +5,8 @@
       <p class="text-muted-foreground">Process new items from sources</p>
     </div>
 
+    <ProjectSubnav v-if="projectId" :project-id="projectId" />
+
     <!-- Active Project Info -->
     <div v-if="activeProject" class="rounded-lg border bg-card p-6">
       <h2 class="text-lg font-semibold">Active Project</h2>
@@ -59,6 +61,32 @@
       >
         {{ running ? 'Running...' : 'Run Batch' }}
       </button>
+
+      <div class="border-t pt-4 space-y-2">
+        <label class="text-sm font-medium">Cursor Published At (UTC)</label>
+        <input
+          v-model="cursorPublishedAt"
+          type="datetime-local"
+          class="w-full rounded-lg border bg-background px-3 py-2"
+          :disabled="!sourceId || updatingCursor"
+        />
+        <div class="flex gap-2">
+          <button
+            @click="setCursor"
+            class="flex-1 rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+            :disabled="!sourceId || !cursorPublishedAt || updatingCursor"
+          >
+            {{ updatingCursor ? 'Saving...' : 'Set Cursor' }}
+          </button>
+          <button
+            @click="clearCursor"
+            class="flex-1 rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+            :disabled="!sourceId || updatingCursor"
+          >
+            Clear Cursor
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Results -->
@@ -89,20 +117,35 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useApiStore } from '@/stores/api'
+import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import type { ProjectConfig } from '@/types'
 
 const apiStore = useApiStore()
+const route = useRoute()
+
+const projectId = route.params.id as string | undefined
 
 const activeProject = ref<{ config: ProjectConfig } | null>(null)
 const sourceId = ref('')
 const maxItems = ref(50)
 const running = ref(false)
+const updatingCursor = ref(false)
+const cursorPublishedAt = ref('')
 const result = ref<{ commit_id: string | null; items_processed: number; events_written: number; trace_id?: string } | null>(null)
 
 async function loadActiveProject() {
   try {
-    activeProject.value = await apiStore.getActiveConfig()
+    if (projectId) {
+      activeProject.value = await apiStore.getConfig(projectId)
+    } else {
+      activeProject.value = await apiStore.getActiveConfig()
+    }
+
+    if (activeProject.value?.config.sources.length) {
+      sourceId.value = activeProject.value.config.sources[0].id
+    }
   } catch (err) {
     console.error('No active project:', err)
   }
@@ -113,12 +156,44 @@ async function runBatch() {
   
   try {
     running.value = true
-    result.value = await apiStore.runBatch(sourceId.value, maxItems.value)
+    result.value = await apiStore.runBatch(sourceId.value, maxItems.value, projectId)
   } catch (err) {
     console.error('Run failed:', err)
     alert('Run failed: ' + (err as Error).message)
   } finally {
     running.value = false
+  }
+}
+
+async function setCursor() {
+  if (!sourceId.value || !cursorPublishedAt.value) return
+
+  try {
+    updatingCursor.value = true
+    const cursorIso = new Date(cursorPublishedAt.value).toISOString()
+    const response = await apiStore.updateSourceCursor(sourceId.value, cursorIso, true, projectId)
+    alert(`Cursor updated for ${response.source_id} to ${response.cursor_published_at}`)
+  } catch (err) {
+    console.error('Set cursor failed:', err)
+    alert('Set cursor failed: ' + (err as Error).message)
+  } finally {
+    updatingCursor.value = false
+  }
+}
+
+async function clearCursor() {
+  if (!sourceId.value) return
+
+  try {
+    updatingCursor.value = true
+    const response = await apiStore.updateSourceCursor(sourceId.value, null, true, projectId)
+    cursorPublishedAt.value = ''
+    alert(`Cursor cleared for ${response.source_id}`)
+  } catch (err) {
+    console.error('Clear cursor failed:', err)
+    alert('Clear cursor failed: ' + (err as Error).message)
+  } finally {
+    updatingCursor.value = false
   }
 }
 

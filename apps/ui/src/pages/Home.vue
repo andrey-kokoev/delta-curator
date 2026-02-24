@@ -95,7 +95,7 @@
         </RouterLink>
         
         <RouterLink
-          to="/run"
+          :to="activeConfig ? `/projects/${activeConfig.config.project_id}/run` : '/projects'"
           class="flex items-center gap-3 rounded-lg border p-4 hover:bg-accent transition-colors"
         >
           <Play class="h-5 w-5" />
@@ -106,7 +106,7 @@
         </RouterLink>
         
         <RouterLink
-          to="/search"
+          :to="activeConfig ? `/projects/${activeConfig.config.project_id}/search` : '/projects'"
           class="flex items-center gap-3 rounded-lg border p-4 hover:bg-accent transition-colors"
         >
           <Search class="h-5 w-5" />

@@ -5,6 +5,7 @@
 
 import type { Env } from './env';
 import type { ProjectConfig, ProjectConfigIndex } from '@delta-curator/protocol';
+import { WorkersAIRanker } from '@delta-curator/plugin-ranker-workers-ai';
 import { RSSSource } from './sources/rss';
 import { FingerprintComparator, RulesDecider, SimpleMerger } from './plugins';
 
@@ -419,6 +420,16 @@ async function handleAdminTokenAuth(request: Request, env: Env): Promise<Respons
   }
 }
 
+async function isAdminRequest(request: Request, env: Env): Promise<boolean> {
+  const authHeader = request.headers.get('Authorization');
+  if (authHeader?.startsWith('Bearer ')) {
+    return authHeader.slice(7) === env.ADMIN_TOKEN;
+  }
+
+  const session = await getSession(request, env);
+  return Boolean(session?.user?.roles?.includes('admin'));
+}
+
 // ============================================================================
 // Config Store Implementation
 // ============================================================================
@@ -462,6 +473,30 @@ async function sha256Base64(input: string): Promise<string> {
   const encoded = new TextEncoder().encode(input);
   const digest = await crypto.subtle.digest('SHA-256', encoded);
   return bytesToBase64(new Uint8Array(digest)).replace(/=+$/g, '');
+}
+
+function buildRerankPassage(payload: unknown, maxChars: number): string {
+  const doc = (payload ?? {}) as Record<string, unknown>;
+  const title = String(doc.title ?? '').trim();
+  const body = String(doc.description ?? doc.summary ?? doc.content ?? '').trim();
+  const facets = Array.isArray(doc.facets)
+    ? doc.facets
+      .map((facet) => {
+        if (!facet || typeof facet !== 'object') return '';
+        const typed = facet as Record<string, unknown>;
+        const key = String(typed.type ?? typed.key ?? '').trim();
+        const value = String(typed.value ?? '').trim();
+        return `${key}:${value}`;
+      })
+      .filter(Boolean)
+      .join(', ')
+    : '';
+
+  const text = [title, body.slice(0, maxChars), facets ? `facets: ${facets}` : '']
+    .filter(Boolean)
+    .join('\n');
+
+  return text.slice(0, maxChars);
 }
 
 async function getTableColumns(env: Env, table: 'commits' | 'source_state' | 'curated_docs'): Promise<Set<string>> {
@@ -526,6 +561,75 @@ async function upsertSourceState(
   ).run();
 }
 
+async function ensureCursorCommit(
+  env: Env,
+  commitColumns: Set<string>,
+  sourceId: string,
+  traceId: string,
+  oldState: unknown,
+  newState: unknown,
+  now: string,
+  itemIds: string[]
+): Promise<{ commitId: string; commitKey: string }> {
+  const oldStateJson = JSON.stringify(oldState ?? {});
+  const newStateJson = JSON.stringify(newState ?? {});
+  const commitKey = await sha256Base64(
+    `${sourceId}:${oldStateJson}:${itemIds.sort().join('|')}`
+  );
+
+  if (
+    commitColumns.has('commit_key') &&
+    commitColumns.has('old_state') &&
+    commitColumns.has('new_state')
+  ) {
+    const existing = await env.DB.prepare(
+      'SELECT commit_id FROM commits WHERE commit_key = ?'
+    ).bind(commitKey).first<{ commit_id: string }>();
+
+    if (existing?.commit_id) {
+      return { commitId: existing.commit_id, commitKey };
+    }
+
+    const commitId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO commits
+       (commit_id, commit_key, trace_id, source_id, old_state, new_state, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      commitId,
+      commitKey,
+      traceId,
+      sourceId,
+      oldStateJson,
+      newStateJson,
+      now
+    ).run();
+
+    return { commitId, commitKey };
+  }
+
+  const commitId = crypto.randomUUID();
+  if (commitColumns.has('source_state')) {
+    await env.DB.prepare(
+      `INSERT INTO commits
+       (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      commitId,
+      traceId,
+      sourceId,
+      newStateJson,
+      itemIds.length,
+      0,
+      now
+    ).run();
+
+    return { commitId, commitKey };
+  }
+
+  throw new Error('Unsupported commits table schema');
+}
+
 function validateProjectConfig(config: unknown): { success: boolean; data?: ProjectConfig; error?: string } {
   try {
     const c = config as ProjectConfig;
@@ -564,6 +668,15 @@ async function writeConfig(
   const r2Key = generateR2Key(projectId, version);
   
   try {
+    if (isActive) {
+      await env.DB.prepare(
+        `UPDATE project_configs
+         SET is_active = 0,
+             updated_at = ?
+         WHERE is_active = 1`
+      ).bind(now).run();
+    }
+
     // Write to R2 first
     await env.ARTIFACTS.put(r2Key, content, {
       httpMetadata: { contentType: 'application/json' },
@@ -650,8 +763,57 @@ async function readConfigVersion(env: Env, projectId: string, version: string): 
   }
 }
 
+async function normalizeActiveProjectState(env: Env): Promise<void> {
+  const activeRows = await env.DB.prepare(
+    `SELECT project_id, version
+     FROM project_configs
+     WHERE is_active = 1
+     ORDER BY updated_at DESC`
+  ).all<{ project_id: string; version: string }>();
+
+  let winner: { project_id: string; version: string } | null = null;
+  if ((activeRows.results || []).length > 0) {
+    winner = activeRows.results![0];
+  } else {
+    winner = await env.DB.prepare(
+      `SELECT project_id, version
+       FROM project_configs
+       ORDER BY updated_at DESC
+       LIMIT 1`
+    ).first<{ project_id: string; version: string }>();
+  }
+
+  if (!winner) {
+    return;
+  }
+
+  const needsNormalize = (activeRows.results || []).length !== 1 ||
+    activeRows.results![0]?.project_id !== winner.project_id ||
+    activeRows.results![0]?.version !== winner.version;
+
+  if (!needsNormalize) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE project_configs
+     SET is_active = 0,
+         updated_at = ?`
+  ).bind(now).run();
+
+  await env.DB.prepare(
+    `UPDATE project_configs
+     SET is_active = 1,
+         updated_at = ?
+     WHERE project_id = ? AND version = ?`
+  ).bind(now, winner.project_id, winner.version).run();
+}
+
 async function listConfigs(env: Env): Promise<{ configs: ProjectConfigIndex[]; error?: string }> {
   try {
+    await normalizeActiveProjectState(env);
+
     const result = await env.DB.prepare(
       'SELECT * FROM project_configs ORDER BY updated_at DESC'
     ).all<ProjectConfigIndex>();
@@ -664,24 +826,45 @@ async function listConfigs(env: Env): Promise<{ configs: ProjectConfigIndex[]; e
 
 async function setActiveConfig(env: Env, projectId: string, version?: string): Promise<{ success: boolean; error?: string }> {
   try {
-    if (version) {
-      await env.DB.prepare(
-        `UPDATE project_configs 
-         SET is_active = CASE WHEN version = ? THEN 1 ELSE 0 END,
-         updated_at = ?
-         WHERE project_id = ?`
-      ).bind(version, new Date().toISOString(), projectId).run();
-    } else {
-      await env.DB.prepare(
-        `UPDATE project_configs 
-         SET is_active = CASE 
-           WHEN version = (SELECT version FROM project_configs WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1) 
-           THEN 1 ELSE 0 
-         END,
-         updated_at = ?
-         WHERE project_id = ?`
-      ).bind(projectId, new Date().toISOString(), projectId).run();
+    const now = new Date().toISOString();
+
+    const target = version
+      ? await env.DB.prepare(
+          `SELECT project_id, version
+           FROM project_configs
+           WHERE project_id = ? AND version = ?
+           LIMIT 1`
+        ).bind(projectId, version).first<{ project_id: string; version: string }>()
+      : await env.DB.prepare(
+          `SELECT project_id, version
+           FROM project_configs
+           WHERE project_id = ?
+           ORDER BY updated_at DESC
+           LIMIT 1`
+        ).bind(projectId).first<{ project_id: string; version: string }>();
+
+    if (!target) {
+      return {
+        success: false,
+        error: version
+          ? `Project/version not found: ${projectId}@${version}`
+          : `Project not found: ${projectId}`
+      };
     }
+
+    await env.DB.prepare(
+      `UPDATE project_configs
+       SET is_active = 0,
+           updated_at = ?
+       WHERE is_active = 1`
+    ).bind(now).run();
+
+    await env.DB.prepare(
+      `UPDATE project_configs
+       SET is_active = 1,
+           updated_at = ?
+       WHERE project_id = ? AND version = ?`
+    ).bind(now, target.project_id, target.version).run();
     
     return { success: true };
   } catch (err) {
@@ -691,6 +874,8 @@ async function setActiveConfig(env: Env, projectId: string, version?: string): P
 
 async function getActiveConfig(env: Env): Promise<{ config?: ProjectConfig; index?: ProjectConfigIndex; error?: string }> {
   try {
+    await normalizeActiveProjectState(env);
+
     const index = await env.DB.prepare(
       'SELECT * FROM project_configs WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1'
     ).first<ProjectConfigIndex>();
@@ -708,10 +893,44 @@ async function getActiveConfig(env: Env): Promise<{ config?: ProjectConfig; inde
 async function deleteConfig(env: Env, projectId: string, version: string): Promise<{ success: boolean; error?: string }> {
   try {
     const r2Key = generateR2Key(projectId, version);
+
+    const deletingRow = await env.DB.prepare(
+      'SELECT is_active FROM project_configs WHERE project_id = ? AND version = ?'
+    ).bind(projectId, version).first<{ is_active: number }>();
+
+    if (!deletingRow) {
+      return { success: false, error: `Config not found for ${projectId}@${version}` };
+    }
     
     await env.DB.prepare(
       'DELETE FROM project_configs WHERE project_id = ? AND version = ?'
     ).bind(projectId, version).run();
+
+    if (deletingRow.is_active === 1) {
+      const fallback = await env.DB.prepare(
+        `SELECT project_id, version
+         FROM project_configs
+         ORDER BY updated_at DESC
+         LIMIT 1`
+      ).first<{ project_id: string; version: string }>();
+
+      if (fallback) {
+        const now = new Date().toISOString();
+        await env.DB.prepare(
+          `UPDATE project_configs
+           SET is_active = 0,
+               updated_at = ?
+           WHERE is_active = 1`
+        ).bind(now).run();
+
+        await env.DB.prepare(
+          `UPDATE project_configs
+           SET is_active = 1,
+               updated_at = ?
+           WHERE project_id = ? AND version = ?`
+        ).bind(now, fallback.project_id, fallback.version).run();
+      }
+    }
     
     await env.ARTIFACTS.delete(r2Key);
     
@@ -869,6 +1088,135 @@ async function handleConfigDeleteRoute(env: Env, projectId: string, version: str
   });
 }
 
+async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promise<Response> {
+  if (!(await isAdminRequest(request, env))) {
+    return new Response(JSON.stringify({ error: 'Admin authentication required' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  try {
+    const body = await request.json() as {
+      project_id?: string;
+      source_id?: string;
+      cursor_published_at?: string | null;
+      clear_recent_guids?: boolean;
+    };
+
+    const sourceId = (body.source_id || '').trim();
+    if (!sourceId) {
+      return new Response(JSON.stringify({ error: 'source_id is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const cursorPublishedAt = body.cursor_published_at ?? null;
+    if (cursorPublishedAt !== null && Number.isNaN(Date.parse(cursorPublishedAt))) {
+      return new Response(JSON.stringify({ error: 'cursor_published_at must be valid ISO datetime or null' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const projectId = (body.project_id || '').trim();
+    if (!projectId) {
+      return new Response(JSON.stringify({ error: 'project_id is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const configResult = await readConfig(env, projectId);
+    if (configResult.error || !configResult.config) {
+      return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const sourceExists = configResult.config.sources.some((source) => source.id === sourceId);
+    if (!sourceExists) {
+      return new Response(JSON.stringify({
+        error: `Unknown source_id: ${sourceId}`,
+        available_sources: configResult.config.sources.map((source) => source.id)
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const now = new Date().toISOString();
+    const existingStateRow = await env.DB.prepare(
+      'SELECT state FROM source_state WHERE source_id = ?'
+    ).bind(sourceId).first<{ state: string }>();
+
+    let oldState: Record<string, unknown> = {};
+    try {
+      oldState = existingStateRow?.state ? JSON.parse(existingStateRow.state) : {};
+    } catch {
+      oldState = {};
+    }
+
+    const newState: Record<string, unknown> = {
+      ...oldState,
+      lastFetch: now
+    };
+
+    if (cursorPublishedAt === null) {
+      delete newState.cursorPublishedAt;
+    } else {
+      newState.cursorPublishedAt = new Date(cursorPublishedAt).toISOString();
+    }
+
+    if (body.clear_recent_guids ?? true) {
+      newState.recentGuids = [];
+      newState.processedGuids = [];
+    }
+
+    const traceId = crypto.randomUUID();
+    const commitColumns = await getTableColumns(env, 'commits');
+    const sourceStateColumns = await getTableColumns(env, 'source_state');
+    const cursorCommit = await ensureCursorCommit(
+      env,
+      commitColumns,
+      sourceId,
+      traceId,
+      oldState,
+      newState,
+      now,
+      [`cursor-update:${sourceId}:${newState.cursorPublishedAt ?? 'null'}`]
+    );
+
+    await upsertSourceState(
+      env,
+      sourceStateColumns,
+      sourceId,
+      newState,
+      now,
+      { commitId: cursorCommit.commitId, commitKey: cursorCommit.commitKey }
+    );
+
+    return new Response(JSON.stringify({
+      success: true,
+      project_id: configResult.config.project_id,
+      source_id: sourceId,
+      cursor_published_at: (newState.cursorPublishedAt as string | undefined) ?? null,
+      recent_guids_count: Array.isArray(newState.recentGuids) ? newState.recentGuids.length : 0,
+      commit_id: cursorCommit.commitId,
+      trace_id: traceId
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (err: any) {
+    return new Response(JSON.stringify({ error: err?.message || String(err) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
 async function handleConfigActiveRoute(env: Env): Promise<Response> {
   const result = await getActiveConfig(env);
   
@@ -907,13 +1255,40 @@ async function handleSeedRoute(env: Env): Promise<Response> {
 async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   const startTime = Date.now();
   const url = new URL(request.url);
-  const sourceId = url.searchParams.get('source_id');
-  const maxItems = parseInt(url.searchParams.get('max_items') || '10', 10);
+  let body: {
+    source_id?: string;
+    max_items?: number;
+    project_id?: string;
+  } = {};
+
+  try {
+    body = await request.json();
+  } catch {
+    body = {};
+  }
+
+  const sourceId = (body.source_id || url.searchParams.get('source_id') || '').trim() || null;
+  const bodyMaxItems = Number.isFinite(Number(body.max_items)) ? Number(body.max_items) : null;
+  const maxItems = Math.max(
+    1,
+    Math.min(
+      bodyMaxItems ?? parseInt(url.searchParams.get('max_items') || '10', 10),
+      500
+    )
+  );
+  const projectId = (body.project_id || url.searchParams.get('project_id') || '').trim();
+
+  if (!projectId) {
+    return new Response(JSON.stringify({ error: 'project_id is required' }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
   
-  // Get active config
-  const configResult = await getActiveConfig(env);
+  // Get scoped config
+  const configResult = await readConfig(env, projectId);
   if (configResult.error || !configResult.config) {
-    return new Response(JSON.stringify({ error: configResult.error || 'No active config' }), { 
+    return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), { 
       status: 400,
       headers: { 'Content-Type': 'application/json' }
     });
@@ -990,6 +1365,36 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     }
     
     const items = batchResult.items;
+
+    const ingestRanking = config.pipeline?.ranking?.ingest;
+    const rankingEnabled = Boolean(
+      ingestRanking?.enabled &&
+      ingestRanking?.backend === 'workers_ai_rerank' &&
+      env.AI
+    );
+    const rankingQuery = typeof ingestRanking?.query === 'string' && ingestRanking.query.trim().length > 0
+      ? ingestRanking.query.trim()
+      : (config.topic?.label || '').trim();
+    const rankingModel = typeof ingestRanking?.model === 'string' && ingestRanking.model.trim().length > 0
+      ? ingestRanking.model.trim()
+      : '@cf/baai/bge-reranker-base';
+    const rankingMaxPassageChars = Number.isInteger(ingestRanking?.max_passage_chars)
+      ? Math.max(256, Math.min(Number(ingestRanking?.max_passage_chars), 12000))
+      : 4000;
+    const rankingThreshold = 0.2;
+    const rankScoresByItem = new Map<string, number>();
+
+    if (rankingEnabled && rankingQuery) {
+      const ranker = new WorkersAIRanker(env.AI, rankingQuery, rankingModel, rankingMaxPassageChars);
+      const passages = items.map((item) => ({
+        id: item.source_item_id,
+        text: buildRerankPassage(item.payload, rankingMaxPassageChars)
+      }));
+      const scores = await ranker.score(passages);
+      for (const score of scores) {
+        rankScoresByItem.set(score.id, score.score);
+      }
+    }
     
     // Process each item
     const events: any[] = [];
@@ -1009,6 +1414,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       
       if (existing) {
         continue; // Skip duplicate
+      }
+
+      if (rankingEnabled && rankingQuery) {
+        const rankScore = rankScoresByItem.get(item.source_item_id) ?? 0;
+        if (rankScore < rankingThreshold) {
+          continue;
+        }
       }
       
       // Prepare candidate doc
@@ -1063,16 +1475,40 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     
     if (events.length === 0) {
       // Update source state even if no new events
-      await upsertSourceState(
-        env,
-        sourceStateColumns,
-        sourceConfig.id,
-        batchResult.newState,
-        now
-      );
+      let cursorCommitId: string | null = null;
+      if (sourceStateColumns.has('last_commit_id') && sourceStateColumns.has('last_commit_key')) {
+        const cursorCommit = await ensureCursorCommit(
+          env,
+          commitColumns,
+          sourceConfig.id,
+          traceId,
+          sourceState,
+          batchResult.newState,
+          now,
+          items.map((item) => item.source_item_id)
+        );
+        cursorCommitId = cursorCommit.commitId;
+
+        await upsertSourceState(
+          env,
+          sourceStateColumns,
+          sourceConfig.id,
+          batchResult.newState,
+          now,
+          { commitId: cursorCommit.commitId, commitKey: cursorCommit.commitKey }
+        );
+      } else {
+        await upsertSourceState(
+          env,
+          sourceStateColumns,
+          sourceConfig.id,
+          batchResult.newState,
+          now
+        );
+      }
       
       return new Response(JSON.stringify({ 
-        commit_id: null,
+        commit_id: cursorCommitId,
         trace_id: traceId,
         items_processed: items.length,
         events_written: 0,
@@ -1242,6 +1678,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       trace_id: traceId,
       items_processed: items.length,
       events_written: events.length,
+      project_id: config.project_id,
       source_id: sourceConfig.id,
       took_ms: Date.now() - startTime
     }), {
@@ -1260,28 +1697,153 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
 }
 
 async function handleInspectRoute(env: Env, request: Request): Promise<Response> {
-  const url = new URL(request.url);
-  const since = url.searchParams.get('since') || 'PT24H';
-  const format = url.searchParams.get('format') || 'markdown';
-  
-  const markdown = `# Delta-Curator Digest
+  try {
+    const url = new URL(request.url);
+    const since = url.searchParams.get('since') || 'PT24H';
+    const format = url.searchParams.get('format') || 'markdown';
+    const projectId = (url.searchParams.get('project_id') || '').trim();
 
-## Summary
-- No events since ${since}
+    if (!projectId) {
+      return new Response(JSON.stringify({ error: 'project_id is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
 
----
-Generated at ${new Date().toISOString()}
-`;
-  
-  if (format === 'json') {
-    return new Response(JSON.stringify({ markdown }), {
+    let scopedProjectId: string | null = null;
+    let scopedSourceIds: string[] | null = null;
+
+    const configResult = await readConfig(env, projectId);
+    if (configResult.error || !configResult.config) {
+      return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    scopedProjectId = configResult.config.project_id;
+    scopedSourceIds = configResult.config.sources.map((source) => source.id);
+
+    if (scopedSourceIds && scopedSourceIds.length === 0) {
+      const markdown = [
+        '# Delta-Curator Digest',
+        '',
+        '## Summary',
+        `- Window: ${since}`,
+        '- Sources tracked: 0',
+        `- Project: ${scopedProjectId}`,
+        '',
+        '## Source Cursors',
+        '- No source state found',
+        '',
+        '---',
+        `Generated at ${new Date().toISOString()}`,
+        ''
+      ].join('\n');
+
+      if (format === 'json') {
+        return new Response(JSON.stringify({
+          since,
+          generated_at: new Date().toISOString(),
+          project_id: scopedProjectId,
+          sources: [],
+          markdown
+        }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      return new Response(markdown, {
+        headers: { 'Content-Type': 'text/markdown' }
+      });
+    }
+
+    const stateRows = scopedSourceIds
+      ? await env.DB.prepare(
+        `SELECT source_id, state, updated_at
+         FROM source_state
+         WHERE source_id IN (${scopedSourceIds.map(() => '?').join(', ')})
+         ORDER BY updated_at DESC`
+      ).bind(...scopedSourceIds).all<{ source_id: string; state: string; updated_at: string }>()
+      : await env.DB.prepare(
+        `SELECT source_id, state, updated_at
+         FROM source_state
+         ORDER BY updated_at DESC`
+      ).all<{ source_id: string; state: string; updated_at: string }>();
+
+    const sources = (stateRows.results || []).map((row) => {
+      let parsedState: Record<string, unknown> = {};
+      try {
+        parsedState = row.state ? JSON.parse(row.state) : {};
+      } catch {
+        parsedState = {};
+      }
+
+      const recentGuids = Array.isArray(parsedState.recentGuids)
+        ? parsedState.recentGuids
+        : Array.isArray(parsedState.processedGuids)
+          ? parsedState.processedGuids
+          : [];
+
+      return {
+        source_id: row.source_id,
+        cursor_published_at: typeof parsedState.cursorPublishedAt === 'string' ? parsedState.cursorPublishedAt : null,
+        last_fetch: typeof parsedState.lastFetch === 'string' ? parsedState.lastFetch : null,
+        recent_guids_count: recentGuids.length,
+        updated_at: row.updated_at
+      };
+    });
+
+    const markdownLines = [
+      '# Delta-Curator Digest',
+      '',
+      '## Summary',
+      `- Window: ${since}`,
+      `- Sources tracked: ${sources.length}`,
+      `- Project: ${scopedProjectId ?? 'all'}`,
+      '',
+      '## Source Cursors'
+    ];
+
+    if (sources.length === 0) {
+      markdownLines.push('- No source state found');
+    } else {
+      for (const source of sources) {
+        markdownLines.push(`- ${source.source_id}`);
+        markdownLines.push(`  - cursorPublishedAt: ${source.cursor_published_at ?? 'n/a'}`);
+        markdownLines.push(`  - lastFetch: ${source.last_fetch ?? 'n/a'}`);
+        markdownLines.push(`  - recentGuids: ${source.recent_guids_count}`);
+        markdownLines.push(`  - stateUpdatedAt: ${source.updated_at}`);
+      }
+    }
+
+    markdownLines.push('');
+    markdownLines.push('---');
+    markdownLines.push(`Generated at ${new Date().toISOString()}`);
+
+    const markdown = `${markdownLines.join('\n')}\n`;
+
+    if (format === 'json') {
+      return new Response(JSON.stringify({
+        since,
+        generated_at: new Date().toISOString(),
+        project_id: scopedProjectId,
+        sources,
+        markdown
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    return new Response(markdown, {
+      headers: { 'Content-Type': 'text/markdown' }
+    });
+  } catch (err: any) {
+    return new Response(JSON.stringify({ error: err?.message || String(err) }), {
+      status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
   }
-  
-  return new Response(markdown, {
-    headers: { 'Content-Type': 'text/markdown' }
-  });
 }
 
 async function handleSearchRoute(env: Env, request: Request): Promise<Response> {
@@ -1290,52 +1852,161 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
   const q = url.searchParams.get('q') || '';
   const k = parseInt(url.searchParams.get('k') || '20', 10);
   const rerank = url.searchParams.get('rerank') === 'true';
+  const projectId = (url.searchParams.get('project_id') || '').trim();
+  const sourceId = (url.searchParams.get('source_id') || '').trim();
   
   try {
+    if (!projectId) {
+      return new Response(JSON.stringify({
+        error: 'project_id is required',
+        query: q,
+        k,
+        rerank,
+        docs: [],
+        total: 0,
+        took_ms: Date.now() - startTime
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    let allowedSourceIds: string[] | null = null;
+
+    const configResult = await readConfig(env, projectId);
+    if (configResult.error || !configResult.config) {
+      return new Response(JSON.stringify({
+        error: configResult.error || `Unknown project_id: ${projectId}`,
+        query: q,
+        k,
+        rerank,
+        docs: [],
+        total: 0,
+        took_ms: Date.now() - startTime
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    allowedSourceIds = configResult.config.sources.map((source) => source.id);
+    if (sourceId) {
+      if (!allowedSourceIds.includes(sourceId)) {
+        return new Response(JSON.stringify({
+          error: `source_id ${sourceId} is not part of project ${projectId}`,
+          query: q,
+          k,
+          rerank,
+          docs: [],
+          total: 0,
+          took_ms: Date.now() - startTime
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      allowedSourceIds = [sourceId];
+    }
+
+    if (allowedSourceIds && allowedSourceIds.length === 0) {
+      return new Response(JSON.stringify({
+        query: q,
+        k,
+        rerank,
+        project_id: projectId || undefined,
+        source_id: sourceId || undefined,
+        docs: [],
+        total: 0,
+        took_ms: Date.now() - startTime
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const curatedDocColumns = await getTableColumns(env, 'curated_docs');
     let docs: any[] = [];
+    const sourcePlaceholders = allowedSourceIds?.map(() => '?').join(', ') || '';
+
+    const sourceFilterClause = allowedSourceIds
+      ? ` AND e.source_id IN (${sourcePlaceholders})`
+      : '';
+    const sourceFilterBindings = allowedSourceIds ? [...allowedSourceIds] : [];
     
-    if (q) {
-      // Search in curated_docs by title, summary, or source_url
+    if (curatedDocColumns.has('event_id')) {
+      const richWhere = q
+        ? `WHERE (cd.title LIKE ? OR cd.summary LIKE ? OR cd.source_url LIKE ?)`
+        : 'WHERE 1=1';
+      const richBindings: unknown[] = [];
+      if (q) {
+        richBindings.push(`%${q}%`, `%${q}%`, `%${q}%`);
+      }
+      richBindings.push(...sourceFilterBindings);
+      richBindings.push(k);
+
       const result = await env.DB.prepare(
-        `SELECT * FROM curated_docs 
-         WHERE title LIKE ? OR summary LIKE ? OR source_url LIKE ?
-         ORDER BY rank_score DESC, fetched_at DESC
+        `SELECT
+           cd.doc_id,
+           COALESCE(e.source_item_id, cd.source_url, cd.doc_id) AS source_item_id,
+           json_object(
+             'title', cd.title,
+             'summary', cd.summary,
+             'source_url', cd.source_url,
+             'rank_score', cd.rank_score,
+             'published_at', cd.published_at,
+             'fetched_at', cd.fetched_at,
+             'held', cd.held,
+             'held_until', cd.held_until,
+             'entities', cd.entities
+           ) AS payload,
+           cd.event_id AS last_event_id,
+           e.source_id
+         FROM curated_docs cd
+         LEFT JOIN events e ON e.event_id = cd.event_id
+         ${richWhere}${sourceFilterClause}
+         ORDER BY cd.rank_score DESC, cd.fetched_at DESC
          LIMIT ?`
-      ).bind(`%${q}%`, `%${q}%`, `%${q}%`, k).all();
-      
+      ).bind(...richBindings).all();
+
       docs = (result.results || []).map((row: any) => ({
         doc_id: row.doc_id,
-        event_id: row.event_id,
-        title: row.title,
-        summary: row.summary,
-        source_url: row.source_url,
-        rank_score: row.rank_score,
-        published_at: row.published_at,
-        fetched_at: row.fetched_at,
-        held: row.held === 1,
-        held_until: row.held_until,
-        entities: row.entities ? JSON.parse(row.entities) : []
+        source_item_id: row.source_item_id,
+        payload: row.payload,
+        last_event_id: row.last_event_id,
+        source_id: row.source_id
       }));
     } else {
-      // Return all docs ordered by rank score
+      const legacyWhere = q
+        ? `WHERE (json_extract(cd.payload, '$.title') LIKE ?
+             OR json_extract(cd.payload, '$.description') LIKE ?
+             OR cd.source_item_id LIKE ?)`
+        : 'WHERE 1=1';
+      const legacyBindings: unknown[] = [];
+      if (q) {
+        legacyBindings.push(`%${q}%`, `%${q}%`, `%${q}%`);
+      }
+      legacyBindings.push(...sourceFilterBindings);
+      legacyBindings.push(k);
+
       const result = await env.DB.prepare(
-        `SELECT * FROM curated_docs 
-         ORDER BY rank_score DESC, fetched_at DESC 
+        `SELECT
+           cd.doc_id,
+           cd.source_item_id,
+           cd.payload,
+           cd.last_event_id,
+           e.source_id
+         FROM curated_docs cd
+         LEFT JOIN events e ON e.event_id = cd.last_event_id
+         ${legacyWhere}${sourceFilterClause}
+         ORDER BY e.observed_at DESC
          LIMIT ?`
-      ).bind(k).all();
-      
+      ).bind(...legacyBindings).all();
+
       docs = (result.results || []).map((row: any) => ({
         doc_id: row.doc_id,
-        event_id: row.event_id,
-        title: row.title,
-        summary: row.summary,
-        source_url: row.source_url,
-        rank_score: row.rank_score,
-        published_at: row.published_at,
-        fetched_at: row.fetched_at,
-        held: row.held === 1,
-        held_until: row.held_until,
-        entities: row.entities ? JSON.parse(row.entities) : []
+        source_item_id: row.source_item_id,
+        payload: row.payload,
+        last_event_id: row.last_event_id,
+        source_id: row.source_id
       }));
     }
     
@@ -1345,6 +2016,8 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
       query: q, 
       k, 
       rerank, 
+      project_id: projectId || undefined,
+      source_id: sourceId || undefined,
       docs, 
       total: docs.length, 
       took_ms: tookMs 
@@ -1579,6 +2252,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   
   if (pathname === '/config/active' && method === 'GET') {
     return handleConfigActiveRoute(env);
+  }
+
+  if (pathname === '/sources/cursor' && method === 'POST') {
+    return handleSourceCursorUpdateRoute(env, request);
   }
   
   if (pathname.startsWith('/config/') && pathname.includes('/activate') && method === 'POST') {

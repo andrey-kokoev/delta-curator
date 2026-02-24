@@ -53,27 +53,51 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      path: '/content',
-      name: 'content',
-      component: () => import('@/pages/Content.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/search',
-      name: 'search',
-      component: () => import('@/pages/Search.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
-      path: '/run',
-      name: 'run',
+      path: '/projects/:id/run',
+      name: 'project-run',
       component: () => import('@/pages/RunControl.vue'),
       meta: { requiresAuth: true }
     },
     {
-      path: '/inspect',
-      name: 'inspect',
+      path: '/projects/:id/inspect',
+      name: 'project-inspect',
       component: () => import('@/pages/Inspect.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/projects/:id/content',
+      name: 'project-content',
+      component: () => import('@/pages/Content.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/projects/:id/search',
+      name: 'project-search',
+      component: () => import('@/pages/Search.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/content',
+      redirect: '/projects',
+      name: 'content',
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/search',
+      redirect: '/projects',
+      name: 'search',
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/run',
+      redirect: '/projects',
+      name: 'run',
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/inspect',
+      redirect: '/projects',
+      name: 'inspect',
       meta: { requiresAuth: true }
     },
     {

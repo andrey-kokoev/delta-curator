@@ -16,14 +16,10 @@
           </template>
           <template #secondary-text>Create Manually</template>
         </SplitButton>
-        <RouterLink
-          :to="`/projects/${projectId}`"
-          class="rounded-lg border px-4 py-2 hover:bg-accent"
-        >
-          Back to Project
-        </RouterLink>
       </div>
     </div>
+
+    <ProjectSubnav :project-id="projectId" />
 
     <div v-if="loading" class="text-center py-12">
       <p class="text-muted-foreground">Loading...</p>
@@ -84,14 +80,6 @@
         </div>
       </div>
 
-      <div class="flex justify-end gap-4">
-        <RouterLink
-          :to="`/projects/${projectId}`"
-          class="rounded-lg border px-4 py-2 hover:bg-accent"
-        >
-          Cancel
-        </RouterLink>
-      </div>
     </div>
   </div>
 </template>
@@ -101,6 +89,7 @@ import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Plus, Sparkles } from 'lucide-vue-next'
 import { useApiStore } from '@/stores/api'
+import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import SplitButton from '@/components/SplitButton.vue'
 import AICreateSourceDialog from '@/components/AICreateSourceDialog.vue'
 import type { ProjectConfig, SourceConfig } from '@/types'

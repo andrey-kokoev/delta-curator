@@ -5,6 +5,8 @@
       <p class="text-muted-foreground">View system digest and logs</p>
     </div>
 
+    <ProjectSubnav v-if="projectId" :project-id="projectId" />
+
     <!-- Controls -->
     <div class="flex items-center gap-4">
       <div class="space-y-1">
@@ -24,6 +26,53 @@
       >
         {{ loading ? 'Loading...' : 'Refresh' }}
       </button>
+    </div>
+
+    <!-- Cursor Controls -->
+    <div v-if="sources.length > 0" class="rounded-lg border bg-card p-6 space-y-4">
+      <h2 class="text-lg font-semibold">Source Cursors</h2>
+      <div class="space-y-4">
+        <div
+          v-for="source in sources"
+          :key="source.source_id"
+          class="rounded-lg border p-4 space-y-3"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <div>
+              <p class="font-medium">{{ source.source_id }}</p>
+              <p class="text-xs text-muted-foreground">
+                Updated: {{ source.updated_at }} · Recent GUIDs: {{ source.recent_guids_count }}
+              </p>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              Current: {{ source.cursor_published_at || 'none' }}
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-2 md:flex-row">
+            <input
+              v-model="cursorInputs[source.source_id]"
+              type="datetime-local"
+              class="w-full rounded-lg border bg-background px-3 py-2"
+              :disabled="updatingSourceId === source.source_id"
+            />
+            <button
+              class="rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+              :disabled="!cursorInputs[source.source_id] || updatingSourceId === source.source_id"
+              @click="setCursor(source.source_id)"
+            >
+              {{ updatingSourceId === source.source_id ? 'Saving...' : 'Set' }}
+            </button>
+            <button
+              class="rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+              :disabled="updatingSourceId === source.source_id"
+              @click="clearCursor(source.source_id)"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Digest Content -->
@@ -46,23 +95,80 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { useApiStore } from '@/stores/api'
+import ProjectSubnav from '@/components/ProjectSubnav.vue'
+import type { InspectResult, InspectSourceCursor } from '@/types'
 
 const apiStore = useApiStore()
+const route = useRoute()
+
+const projectId = route.params.id as string | undefined
 
 const since = ref('PT24H')
 const loading = ref(false)
 const digest = ref<string | null>(null)
+const sources = ref<InspectSourceCursor[]>([])
+const cursorInputs = ref<Record<string, string>>({})
+const updatingSourceId = ref<string | null>(null)
+
+function isoToDatetimeLocal(value: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
 
 async function loadDigest() {
   try {
     loading.value = true
-    digest.value = await apiStore.inspect(since.value, 'markdown') as string
+    const result = await apiStore.inspect(since.value, 'json', projectId) as InspectResult
+    digest.value = result.markdown
+    sources.value = result.sources || []
+
+    const inputs: Record<string, string> = {}
+    for (const source of sources.value) {
+      inputs[source.source_id] = isoToDatetimeLocal(source.cursor_published_at)
+    }
+    cursorInputs.value = inputs
   } catch (err) {
     console.error('Failed to load digest:', err)
     digest.value = 'Error loading digest: ' + (err as Error).message
+    sources.value = []
   } finally {
     loading.value = false
+  }
+}
+
+async function setCursor(sourceId: string) {
+  const input = cursorInputs.value[sourceId]
+  if (!input) return
+
+  try {
+    updatingSourceId.value = sourceId
+    const cursorIso = new Date(input).toISOString()
+    await apiStore.updateSourceCursor(sourceId, cursorIso, true, projectId)
+    await loadDigest()
+  } catch (err) {
+    console.error('Failed to set cursor:', err)
+    alert('Failed to set cursor: ' + (err as Error).message)
+  } finally {
+    updatingSourceId.value = null
+  }
+}
+
+async function clearCursor(sourceId: string) {
+  try {
+    updatingSourceId.value = sourceId
+    await apiStore.updateSourceCursor(sourceId, null, true, projectId)
+    await loadDigest()
+  } catch (err) {
+    console.error('Failed to clear cursor:', err)
+    alert('Failed to clear cursor: ' + (err as Error).message)
+  } finally {
+    updatingSourceId.value = null
   }
 }
 

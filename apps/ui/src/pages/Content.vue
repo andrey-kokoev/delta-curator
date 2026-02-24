@@ -5,6 +5,14 @@
       <p class="text-muted-foreground">Browse curated documents</p>
     </div>
 
+    <ProjectSubnav v-if="projectId" :project-id="projectId" />
+
+    <div v-if="project" class="rounded-lg border bg-card p-4">
+      <p class="text-sm text-muted-foreground">Project</p>
+      <p class="font-medium">{{ project.config.project_name }}</p>
+      <p class="text-xs text-muted-foreground">{{ project.config.project_id }}</p>
+    </div>
+
     <!-- Filters -->
     <div class="flex gap-4">
       <input
@@ -31,7 +39,7 @@
       <h3 class="mt-4 text-lg font-medium">No content yet</h3>
       <p class="mt-2 text-muted-foreground">Run a batch to start curating content</p>
       <RouterLink
-        to="/run"
+        :to="project ? `/projects/${project.config.project_id}/run` : '/projects'"
         class="mt-4 inline-block rounded-lg bg-primary px-4 py-2 text-primary-foreground"
       >
         Run Batch
@@ -67,20 +75,39 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { FileText } from 'lucide-vue-next'
-import type { CuratedDoc } from '@/types'
+import { useApiStore } from '@/stores/api'
+import ProjectSubnav from '@/components/ProjectSubnav.vue'
+import type { CuratedDoc, ProjectConfig } from '@/types'
 
 const docs = ref<CuratedDoc[]>([])
 const loading = ref(true)
 const selectedDoc = ref<CuratedDoc | null>(null)
 const filters = ref({ sourceId: '' })
+const project = ref<{ config: ProjectConfig } | null>(null)
+const route = useRoute()
+const apiStore = useApiStore()
+const projectId = route.params.id as string | undefined
+
+async function loadProjectContext() {
+  if (!projectId) return
+  try {
+    project.value = await apiStore.getConfig(projectId)
+  } catch (err) {
+    console.error('Failed to load project context:', err)
+  }
+}
 
 async function loadContent() {
   try {
     loading.value = true
-    // Note: This would need a real API endpoint
-    // For now, showing placeholder
-    docs.value = []
+    const result = await apiStore.listContent({
+      k: 100,
+      projectId,
+      sourceId: filters.value.sourceId || undefined
+    })
+    docs.value = result.docs
   } catch (err) {
     console.error('Failed to load content:', err)
   } finally {
@@ -97,5 +124,8 @@ function formatPayload(payload: string): string {
   }
 }
 
-onMounted(loadContent)
+onMounted(async () => {
+  await loadProjectContext()
+  await loadContent()
+})
 </script>

@@ -51,10 +51,6 @@
 import { 
   Home, 
   FolderKanban, 
-  FileText, 
-  Search, 
-  Play, 
-  Eye, 
   Heart,
   Settings,
   LogOut
@@ -66,10 +62,6 @@ const authStore = useAuthStore()
 const navItems = [
   { name: 'Dashboard', path: '/', icon: Home },
   { name: 'Projects', path: '/projects', icon: FolderKanban },
-  { name: 'Content', path: '/content', icon: FileText },
-  { name: 'Search', path: '/search', icon: Search },
-  { name: 'Run Batch', path: '/run', icon: Play },
-  { name: 'Inspect', path: '/inspect', icon: Eye },
   { name: 'Health', path: '/health', icon: Heart },
   { name: 'Settings', path: '/settings', icon: Settings },
 ]

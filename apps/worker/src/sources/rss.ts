@@ -17,6 +17,14 @@ interface RSSFeed {
   items: RSSItem[];
 }
 
+function parsePubDate(pubDate?: string): number | null {
+  if (!pubDate) {
+    return null;
+  }
+  const parsed = Date.parse(pubDate);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 /**
  * Parse RSS XML to JSON
  */
@@ -50,6 +58,8 @@ export class RSSSource {
   version = '0.1.0';
   description = 'Fetches and parses RSS feeds';
 
+  private readonly maxRecentGuids = 500;
+
   private feedUrl: string;
   private userAgent: string;
 
@@ -65,8 +75,21 @@ export class RSSSource {
     state: SourceState,
     maxItems: number
   ): Promise<{ items: RawDocObserved[]; newState: SourceState } | null> {
-    // Get previously processed guids from state
-    const processedGuids = new Set((state?.processedGuids as string[]) || []);
+    const cursorPublishedAt = typeof state?.cursorPublishedAt === 'string'
+      ? state.cursorPublishedAt
+      : undefined;
+    const cursorPublishedAtMs = parsePubDate(cursorPublishedAt);
+
+    const recentFromState = Array.isArray(state?.recentGuids)
+      ? state.recentGuids
+      : Array.isArray(state?.processedGuids)
+        ? state.processedGuids
+        : [];
+    const recentGuids = new Set(
+      recentFromState
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .slice(-this.maxRecentGuids)
+    );
 
     try {
       // Fetch RSS feed
@@ -84,11 +107,34 @@ export class RSSSource {
       const xml = await response.text();
       const feed = parseRSS(xml);
 
-      // Filter to new items not yet processed
+      // Filter to new items by cursor (pubDate watermark) with GUID fallback
       const newItems = feed.items
         .filter(item => {
           const guid = item.guid || item.link || item.title;
-          return guid && !processedGuids.has(guid);
+          if (!guid) {
+            return false;
+          }
+
+          const pubDateMs = parsePubDate(item.pubDate);
+
+          // Bootstrap path: no cursor yet, use recent GUID dedupe only
+          if (cursorPublishedAtMs === null) {
+            return !recentGuids.has(guid);
+          }
+
+          // Prefer strict watermark filtering when pubDate is available
+          if (pubDateMs !== null) {
+            if (pubDateMs > cursorPublishedAtMs) {
+              return true;
+            }
+            if (pubDateMs === cursorPublishedAtMs) {
+              return !recentGuids.has(guid);
+            }
+            return false;
+          }
+
+          // If pubDate is missing, fallback to recent GUID dedupe
+          return !recentGuids.has(guid);
         })
         .slice(0, maxItems);
 
@@ -98,6 +144,8 @@ export class RSSSource {
 
       // Create RawDocObserved items
       const items: RawDocObserved[] = [];
+      let nextCursorMs = cursorPublishedAtMs;
+      const newlySeenGuids: string[] = [];
 
       for (const item of newItems) {
         const guid = item.guid || item.link || item.title;
@@ -115,17 +163,29 @@ export class RSSSource {
           }
         });
 
-        processedGuids.add(guid);
+        newlySeenGuids.push(guid);
+        const pubDateMs = parsePubDate(item.pubDate);
+        if (pubDateMs !== null && (nextCursorMs === null || pubDateMs > nextCursorMs)) {
+          nextCursorMs = pubDateMs;
+        }
       }
 
       if (items.length === 0) {
         return null;
       }
 
+      const mergedRecentGuids = [
+        ...Array.from(recentGuids),
+        ...newlySeenGuids
+      ];
+      const dedupedRecentGuids = Array.from(new Set(mergedRecentGuids)).slice(-this.maxRecentGuids);
+
       return {
         items,
         newState: {
-          processedGuids: Array.from(processedGuids).sort(),
+          cursorPublishedAt: nextCursorMs !== null ? new Date(nextCursorMs).toISOString() : cursorPublishedAt,
+          recentGuids: dedupedRecentGuids,
+          processedGuids: dedupedRecentGuids,
           lastFetch: new Date().toISOString()
         }
       };

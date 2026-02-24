@@ -25,6 +25,13 @@
       </div>
       <div class="flex items-center gap-2">
         <button
+          @click="deleteProject"
+          class="rounded-lg border border-destructive px-4 py-2 text-destructive hover:bg-destructive/10"
+          :disabled="deleting"
+        >
+          {{ deleting ? 'Deleting...' : 'Delete' }}
+        </button>
+        <button
           v-if="!project.index.is_active"
           @click="activate"
           class="rounded-lg border px-4 py-2 hover:bg-accent"
@@ -40,6 +47,8 @@
         </RouterLink>
       </div>
     </div>
+
+    <ProjectSubnav :project-id="projectId" />
 
     <!-- Overview -->
     <div class="grid gap-4 md:grid-cols-3">
@@ -116,6 +125,37 @@
       </div>
     </div>
 
+    <!-- Operations -->
+    <div class="rounded-lg border bg-card p-4">
+      <h2 class="text-lg font-semibold mb-4">Operations</h2>
+      <div class="flex flex-wrap gap-2">
+        <RouterLink
+          :to="`/projects/${project.config.project_id}/content`"
+          class="rounded-lg border px-4 py-2 hover:bg-accent"
+        >
+          Content
+        </RouterLink>
+        <RouterLink
+          :to="`/projects/${project.config.project_id}/search`"
+          class="rounded-lg border px-4 py-2 hover:bg-accent"
+        >
+          Search
+        </RouterLink>
+        <RouterLink
+          :to="`/projects/${project.config.project_id}/run`"
+          class="rounded-lg border px-4 py-2 hover:bg-accent"
+        >
+          Run Batch
+        </RouterLink>
+        <RouterLink
+          :to="`/projects/${project.config.project_id}/inspect`"
+          class="rounded-lg border px-4 py-2 hover:bg-accent"
+        >
+          Inspect
+        </RouterLink>
+      </div>
+    </div>
+
     <!-- Storage -->
     <div class="rounded-lg border bg-card p-4">
       <h2 class="text-lg font-semibold mb-4">Storage Configuration</h2>
@@ -147,17 +187,20 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useApiStore } from '@/stores/api'
+import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import type { ProjectConfig, ProjectIndex } from '@/types'
 
 const route = useRoute()
+const router = useRouter()
 const apiStore = useApiStore()
 
 const projectId = route.params.id as string
 const project = ref<{ config: ProjectConfig; index: ProjectIndex } | null>(null)
 const loading = ref(true)
 const activating = ref(false)
+const deleting = ref(false)
 
 async function loadProject() {
   try {
@@ -179,6 +222,26 @@ async function activate() {
     console.error('Failed to activate:', err)
   } finally {
     activating.value = false
+  }
+}
+
+async function deleteProject() {
+  if (!project.value) return
+
+  const confirmed = window.confirm(
+    `Delete project "${project.value.config.project_name}" (v${project.value.index.version})? This cannot be undone.`
+  )
+  if (!confirmed) return
+
+  try {
+    deleting.value = true
+    await apiStore.deleteConfig(project.value.config.project_id, project.value.index.version)
+    router.push('/projects')
+  } catch (err) {
+    console.error('Failed to delete project:', err)
+    alert('Failed to delete project: ' + (err as Error).message)
+  } finally {
+    deleting.value = false
   }
 }
 

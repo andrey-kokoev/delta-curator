@@ -5,6 +5,14 @@
       <p class="text-muted-foreground">Query curated content</p>
     </div>
 
+    <ProjectSubnav v-if="projectId" :project-id="projectId" />
+
+    <div v-if="project" class="rounded-lg border bg-card p-4">
+      <p class="text-sm text-muted-foreground">Project</p>
+      <p class="font-medium">{{ project.config.project_name }}</p>
+      <p class="text-xs text-muted-foreground">{{ project.config.project_id }}</p>
+    </div>
+
     <!-- Search Form -->
     <div class="rounded-lg border bg-card p-6 space-y-4">
       <div class="flex gap-4">
@@ -79,25 +87,43 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { Search as SearchIcon } from 'lucide-vue-next'
 import { useApiStore } from '@/stores/api'
-import type { SearchResult } from '@/types'
+import ProjectSubnav from '@/components/ProjectSubnav.vue'
+import type { SearchResult, ProjectConfig } from '@/types'
 
 const apiStore = useApiStore()
+const route = useRoute()
+const projectId = route.params.id as string | undefined
 
 const query = ref('')
 const k = ref(20)
 const rerank = ref(true)
 const searching = ref(false)
 const results = ref<SearchResult | null>(null)
+const project = ref<{ config: ProjectConfig } | null>(null)
+
+async function loadProjectContext() {
+  if (!projectId) return
+  try {
+    project.value = await apiStore.getConfig(projectId)
+  } catch (err) {
+    console.error('Failed to load project context:', err)
+  }
+}
 
 async function performSearch() {
   if (!query.value.trim()) return
   
   try {
     searching.value = true
-    results.value = await apiStore.search(query.value, k.value, rerank.value)
+    results.value = await apiStore.searchScoped(query.value, {
+      k: k.value,
+      rerank: rerank.value,
+      projectId,
+    })
   } catch (err) {
     console.error('Search failed:', err)
     alert('Search failed: ' + (err as Error).message)
@@ -114,4 +140,6 @@ function formatPayload(payload: string): string {
     return payload
   }
 }
+
+onMounted(loadProjectContext)
 </script>

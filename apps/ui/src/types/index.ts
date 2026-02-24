@@ -131,3 +131,18 @@ export interface RunResult {
   events_written: number
   trace_id?: string
 }
+
+export interface InspectSourceCursor {
+  source_id: string
+  cursor_published_at: string | null
+  last_fetch: string | null
+  recent_guids_count: number
+  updated_at: string
+}
+
+export interface InspectResult {
+  since: string
+  generated_at: string
+  sources: InspectSourceCursor[]
+  markdown: string
+}

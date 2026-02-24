@@ -5,13 +5,9 @@
         <h1 class="text-3xl font-bold tracking-tight">Pipeline</h1>
         <p class="text-muted-foreground">Configure processing pipeline</p>
       </div>
-      <RouterLink
-        :to="`/projects/${projectId}`"
-        class="rounded-lg border px-4 py-2 hover:bg-accent"
-      >
-        Back to Project
-      </RouterLink>
     </div>
+
+    <ProjectSubnav :project-id="projectId" />
 
     <div v-if="loading" class="text-center py-12">
       <p class="text-muted-foreground">Loading...</p>
@@ -168,12 +164,6 @@
       </div>
 
       <div class="flex justify-end gap-4">
-        <RouterLink
-          :to="`/projects/${projectId}`"
-          class="rounded-lg border px-4 py-2 hover:bg-accent"
-        >
-          Cancel
-        </RouterLink>
         <button
           @click="savePipeline"
           class="rounded-lg bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
@@ -190,6 +180,7 @@
 import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useApiStore } from '@/stores/api'
+import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import type { ProjectConfig, PipelineConfig } from '@/types'
 
 const route = useRoute()

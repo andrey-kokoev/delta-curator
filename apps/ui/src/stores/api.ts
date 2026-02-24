@@ -6,7 +6,8 @@ import type {
   ProjectIndex, 
   SearchResult, 
   HealthStatus,
-  RunResult 
+  RunResult,
+  InspectResult
 } from '@/types'
 
 // API base URL from environment
@@ -101,10 +102,35 @@ export const useApiStore = defineStore('api', () => {
   }
 
   // Operations API
-  async function runBatch(sourceId: string, maxItems = 50): Promise<RunResult> {
+  async function runBatch(sourceId: string, maxItems = 50, projectId?: string): Promise<RunResult> {
     return fetchApi('/run', {
       method: 'POST',
-      body: JSON.stringify({ source_id: sourceId, max_items: maxItems, once: true })
+      body: JSON.stringify({ source_id: sourceId, max_items: maxItems, project_id: projectId, once: true })
+    })
+  }
+
+  async function updateSourceCursor(
+    sourceId: string,
+    cursorPublishedAt: string | null,
+    clearRecentGuids = true,
+    projectId?: string
+  ): Promise<{
+    success: boolean
+    project_id?: string
+    source_id: string
+    cursor_published_at: string | null
+    recent_guids_count: number
+    commit_id: string
+    trace_id: string
+  }> {
+    return fetchApi('/sources/cursor', {
+      method: 'POST',
+      body: JSON.stringify({
+        source_id: sourceId,
+        project_id: projectId,
+        cursor_published_at: cursorPublishedAt,
+        clear_recent_guids: clearRecentGuids
+      })
     })
   }
 
@@ -112,16 +138,71 @@ export const useApiStore = defineStore('api', () => {
     return fetchApi(`/search?q=${encodeURIComponent(query)}&k=${k}&rerank=${rerank}`)
   }
 
-  async function inspect(since = 'PT24H', format: 'markdown' | 'json' = 'markdown'): Promise<string | { markdown: string }> {
+  async function searchScoped(
+    query: string,
+    options?: {
+      k?: number
+      rerank?: boolean
+      projectId?: string
+      sourceId?: string
+    }
+  ): Promise<SearchResult> {
+    const k = options?.k ?? 20
+    const rerank = options?.rerank ?? true
+    const params = new URLSearchParams({
+      q: query,
+      k: String(k),
+      rerank: String(rerank)
+    })
+
+    if (options?.projectId) {
+      params.set('project_id', options.projectId)
+    }
+    if (options?.sourceId) {
+      params.set('source_id', options.sourceId)
+    }
+
+    return fetchApi(`/search?${params.toString()}`)
+  }
+
+  async function listContent(options?: {
+    k?: number
+    projectId?: string
+    sourceId?: string
+  }): Promise<SearchResult> {
+    return searchScoped('', {
+      k: options?.k ?? 100,
+      rerank: false,
+      projectId: options?.projectId,
+      sourceId: options?.sourceId
+    })
+  }
+
+  async function inspect(
+    since = 'PT24H',
+    format: 'markdown' | 'json' = 'markdown',
+    projectId?: string
+  ): Promise<string | InspectResult> {
     const authHeaders = getAuthHeaders()
-    const response = await fetch(`${API_BASE}/inspect?since=${since}&format=${format}`, {
+    const params = new URLSearchParams({ since, format })
+    if (projectId) {
+      params.set('project_id', projectId)
+    }
+
+    const response = await fetch(`${API_BASE}/inspect?${params.toString()}`, {
       credentials: 'include',
       headers: authHeaders
     })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Unknown error' }))
+      throw new Error(err.error || `HTTP ${response.status}`)
+    }
+
     if (format === 'markdown') {
       return response.text()
     }
-    return response.json()
+    return response.json() as Promise<InspectResult>
   }
 
   async function getHealth(): Promise<HealthStatus> {
@@ -148,7 +229,10 @@ export const useApiStore = defineStore('api', () => {
     activateConfig,
     deleteConfig,
     runBatch,
+    updateSourceCursor,
     search,
+    searchScoped,
+    listContent,
     inspect,
     getHealth,
     seedConfig

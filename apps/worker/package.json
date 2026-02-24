@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@cloudflare/kv-asset-handler": "^0.4.2",
+    "@delta-curator/plugin-ranker-workers-ai": "workspace:*",
     "@delta-curator/protocol": "workspace:*",
     "@delta-curator/runtime": "workspace:*"
   },
