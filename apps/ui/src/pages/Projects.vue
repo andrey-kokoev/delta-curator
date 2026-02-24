@@ -111,7 +111,8 @@ import { FolderKanban, Plus, Sparkles } from 'lucide-vue-next'
 import { useApiStore } from '@/stores/api'
 import SplitButton from '@/components/SplitButton.vue'
 import AICreateProjectDialog from '@/components/AICreateProjectDialog.vue'
-import type { ProjectIndex, ProjectConfig } from '@/types'
+import type { ProjectIndex } from '@/types'
+import type { ProjectConfig } from '@delta-curator/protocol'
 import { formatRelativeTime } from '@/lib/utils'
 
 const router = useRouter()
@@ -165,7 +166,7 @@ function goToManualCreate() {
 
 async function handleProjectCreated(config: ProjectConfig) {
   try {
-    await apiStore.saveConfig(config, true)
+    await apiStore.saveConfig(config as any, true)
     await loadProjects()
   } catch (err) {
     console.error('Failed to create project:', err)
