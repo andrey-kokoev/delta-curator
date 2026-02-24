@@ -23,6 +23,6 @@
       "@delta-curator/plugin-merger-json": ["plugins/mergers/json_merge/src"]
     }
   },
-  "include": ["src"],
+  "include": ["packages/*/src", "plugins/*/*/src", "apps/*/src", "examples/*/src"],
   "exclude": ["dist", "node_modules", "**/*.test.ts"]
 }
