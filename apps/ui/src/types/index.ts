@@ -26,6 +26,7 @@ export interface ProjectConfig {
 export interface SourceConfig {
   id: string
   plugin: string
+  enabled?: boolean
   config: Record<string, unknown>
   state?: Record<string, unknown>
 }
@@ -134,10 +135,11 @@ export interface RunResult {
 
 export interface InspectSourceCursor {
   source_id: string
+  enabled: boolean
   cursor_published_at: string | null
   last_fetch: string | null
   recent_guids_count: number
-  updated_at: string
+  updated_at: string | null
 }
 
 export interface InspectResult {

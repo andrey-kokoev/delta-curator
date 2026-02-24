@@ -39,9 +39,17 @@
         >
           <div class="flex items-center justify-between gap-2">
             <div>
-              <p class="font-medium">{{ source.source_id }}</p>
+              <div class="flex items-center gap-2">
+                <p class="font-medium">{{ source.source_id }}</p>
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="source.enabled ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'"
+                >
+                  {{ source.enabled ? 'Enabled' : 'Paused' }}
+                </span>
+              </div>
               <p class="text-xs text-muted-foreground">
-                Updated: {{ source.updated_at }} · Recent GUIDs: {{ source.recent_guids_count }}
+                Updated: {{ source.updated_at || 'n/a' }} · Recent GUIDs: {{ source.recent_guids_count }}
               </p>
             </div>
             <p class="text-xs text-muted-foreground">

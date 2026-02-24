@@ -949,6 +949,7 @@ async function seedConfig(env: Env): Promise<{ success: boolean; projectId?: str
     sources: [{
       id: 'demo-rss-source',
       plugin: 'rss_source',
+      enabled: true,
       config: { feed_url: 'https://example.com/feed.xml', user_agent: 'delta-curator/0.1', max_items_per_batch: 50 }
     }],
     pipeline: {
@@ -1295,16 +1296,47 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   }
   
   const config = configResult.config;
+
+  const isSourceEnabled = (source: { enabled?: boolean }) => source.enabled !== false;
+  const enabledSources = config.sources.filter(isSourceEnabled);
+
+  if (enabledSources.length === 0) {
+    return new Response(JSON.stringify({
+      error: 'No enabled sources found for this project',
+      available_sources: config.sources.map((s) => ({
+        id: s.id,
+        enabled: isSourceEnabled(s)
+      }))
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
   
   // Find source config
-  const sourceConfig = config.sources.find((s) => 
+  const sourceConfig = enabledSources.find((s) => 
     sourceId ? s.id === sourceId : true
   );
+
+  const requestedSource = sourceId
+    ? config.sources.find((s) => s.id === sourceId)
+    : null;
+
+  if (sourceId && requestedSource && !isSourceEnabled(requestedSource)) {
+    return new Response(JSON.stringify({
+      error: `Source is paused: ${sourceId}`,
+      source_id: sourceId,
+      project_id: config.project_id
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
   
   if (!sourceConfig) {
     return new Response(JSON.stringify({ 
       error: 'No source found',
-      available_sources: config.sources.map((s) => s.id)
+      available_sources: enabledSources.map((s) => s.id)
     }), { 
       status: 400,
       headers: { 'Content-Type': 'application/json' }
@@ -1771,10 +1803,13 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
          ORDER BY updated_at DESC`
       ).all<{ source_id: string; state: string; updated_at: string }>();
 
-    const sources = (stateRows.results || []).map((row) => {
+    const stateBySourceId = new Map((stateRows.results || []).map((row) => [row.source_id, row] as const));
+    const sources = configResult.config.sources.map((source) => {
+      const row = stateBySourceId.get(source.id);
+
       let parsedState: Record<string, unknown> = {};
       try {
-        parsedState = row.state ? JSON.parse(row.state) : {};
+        parsedState = row?.state ? JSON.parse(row.state) : {};
       } catch {
         parsedState = {};
       }
@@ -1786,11 +1821,12 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
           : [];
 
       return {
-        source_id: row.source_id,
+        source_id: source.id,
+        enabled: source.enabled !== false,
         cursor_published_at: typeof parsedState.cursorPublishedAt === 'string' ? parsedState.cursorPublishedAt : null,
         last_fetch: typeof parsedState.lastFetch === 'string' ? parsedState.lastFetch : null,
         recent_guids_count: recentGuids.length,
-        updated_at: row.updated_at
+        updated_at: row?.updated_at ?? null
       };
     });
 
@@ -1810,10 +1846,11 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
     } else {
       for (const source of sources) {
         markdownLines.push(`- ${source.source_id}`);
+        markdownLines.push(`  - status: ${source.enabled ? 'enabled' : 'paused'}`);
         markdownLines.push(`  - cursorPublishedAt: ${source.cursor_published_at ?? 'n/a'}`);
         markdownLines.push(`  - lastFetch: ${source.last_fetch ?? 'n/a'}`);
         markdownLines.push(`  - recentGuids: ${source.recent_guids_count}`);
-        markdownLines.push(`  - stateUpdatedAt: ${source.updated_at}`);
+        markdownLines.push(`  - stateUpdatedAt: ${source.updated_at ?? 'n/a'}`);
       }
     }
 

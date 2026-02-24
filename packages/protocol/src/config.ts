@@ -19,6 +19,7 @@ export const PluginRefSchema = z.object({
 export const SourceConfigSchema = z.object({
   id: z.string().min(1, 'Source id is required'),
   plugin: z.string().min(1, 'Plugin id is required'),
+  enabled: z.boolean().default(true),
   config: z.record(z.string(), z.unknown()).optional(),
   state: z.record(z.string(), z.unknown()).optional(),
 });

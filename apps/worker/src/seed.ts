@@ -20,6 +20,7 @@ const DEFAULT_SEED_CONFIG: ProjectConfig = {
     {
       id: 'demo-rss-source',
       plugin: 'rss_source',
+      enabled: true,
       config: {
         feed_url: 'https://example.com/feed.xml',
         user_agent: 'delta-curator/0.1',

@@ -42,10 +42,10 @@
       </div>
     </div>
 
-    <!-- Active Project -->
+    <!-- Project -->
     <div v-if="activeConfig" class="rounded-lg border bg-card">
       <div class="border-b p-6">
-        <h2 class="text-lg font-semibold">Active Project</h2>
+        <h2 class="text-lg font-semibold">Project</h2>
       </div>
       <div class="p-6 space-y-4">
         <div class="flex items-center justify-between">

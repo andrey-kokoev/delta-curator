@@ -14,12 +14,6 @@
       <div>
         <div class="flex items-center gap-3">
           <h1 class="text-3xl font-bold tracking-tight">{{ project.config.project_name }}</h1>
-          <span
-            v-if="project.index.is_active"
-            class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800"
-          >
-            Active
-          </span>
         </div>
         <p class="text-muted-foreground">{{ project.config.project_id }}</p>
       </div>

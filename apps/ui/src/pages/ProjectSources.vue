@@ -38,12 +38,21 @@
       >
         <div class="flex items-start justify-between mb-4">
           <h3 class="text-lg font-semibold">{{ source.id }}</h3>
-          <button
-            @click="removeSource(index)"
-            class="text-sm text-destructive hover:underline"
-          >
-            Remove
-          </button>
+          <div class="flex items-center gap-4">
+            <label class="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                v-model="source.enabled"
+                type="checkbox"
+              />
+              <span>{{ source.enabled === false ? 'Paused' : 'Enabled' }}</span>
+            </label>
+            <button
+              @click="removeSource(index)"
+              class="text-sm text-destructive hover:underline"
+            >
+              Remove
+            </button>
+          </div>
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
@@ -125,6 +134,7 @@ function createSourcesSnapshot(list: SourceConfig[]): string {
   const normalized = list.map(source => ({
     id: source.id,
     plugin: source.plugin,
+    enabled: source.enabled !== false,
     config: source.config ?? {},
     state: source.state ?? {},
   }))
@@ -150,7 +160,10 @@ async function loadProject() {
     loading.value = true
     const result = await apiStore.getConfig(projectId)
     project.value = result.config
-    sources.value = [...result.config.sources]
+    sources.value = result.config.sources.map(source => ({
+      ...source,
+      enabled: source.enabled !== false,
+    }))
     sourceConfigJson.value = sources.value.map(s => JSON.stringify(s.config, null, 2))
     lastSavedSnapshot.value = createSourcesSnapshot(result.config.sources)
     hasLoadedInitialState.value = true
@@ -165,13 +178,17 @@ function addManualSource() {
   sources.value.push({
     id: '',
     plugin: 'rss_source',
+    enabled: true,
     config: {}
   })
   sourceConfigJson.value.push('{}')
 }
 
 function addGuidedSource(source: SourceConfig) {
-  sources.value.push(source)
+  sources.value.push({
+    ...source,
+    enabled: source.enabled !== false,
+  })
   sourceConfigJson.value.push(JSON.stringify(source.config ?? {}, null, 2))
 }
 

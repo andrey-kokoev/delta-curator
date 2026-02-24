@@ -67,12 +67,6 @@
             <div>
               <div class="flex items-center gap-2">
                 <h3 class="font-semibold">{{ config.project_name }}</h3>
-                <span
-                  v-if="config.is_active"
-                  class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800"
-                >
-                  Active
-                </span>
               </div>
               <p class="text-sm text-muted-foreground">{{ config.project_id }}</p>
               <div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">

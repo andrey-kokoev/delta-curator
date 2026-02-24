@@ -377,6 +377,7 @@ const generateConfig = (): ProjectConfig => {
     config.sources.push({
       id: "rss-source",
       plugin: "rss_source",
+      enabled: true,
       config: {
         feed_url: "https://example.com/feed.xml",
         user_agent: 'delta-curator/0.1',
@@ -388,6 +389,7 @@ const generateConfig = (): ProjectConfig => {
     config.sources.push({
       id: "api-source",
       plugin: "api_source",
+      enabled: true,
       config: {
         endpoint: "https://api.example.com/data",
         update_interval: data.frequency === 'hourly' ? 3600 : data.frequency === 'daily' ? 86400 : 604800
@@ -399,6 +401,7 @@ const generateConfig = (): ProjectConfig => {
     config.sources.push({
       id: "default-source",
       plugin: "file_drop",
+      enabled: true,
       config: {},
       state: {}
     })

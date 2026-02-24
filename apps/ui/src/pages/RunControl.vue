@@ -7,9 +7,9 @@
 
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
 
-    <!-- Active Project Info -->
+    <!-- Project Info -->
     <div v-if="activeProject" class="rounded-lg border bg-card p-6">
-      <h2 class="text-lg font-semibold">Active Project</h2>
+      <h2 class="text-lg font-semibold">Project</h2>
       <p class="text-muted-foreground">{{ activeProject.config.project_name }}</p>
       <p class="text-sm text-muted-foreground mt-1">
         {{ activeProject.config.sources.length }} sources available
@@ -17,7 +17,7 @@
     </div>
 
     <div v-else class="rounded-lg border border-destructive bg-destructive/10 p-6">
-      <p class="text-destructive">No active project configured</p>
+      <p class="text-destructive">No project configured</p>
       <RouterLink to="/projects" class="text-primary hover:underline">Select a project</RouterLink>
     </div>
 
