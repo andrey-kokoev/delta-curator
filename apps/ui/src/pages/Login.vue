@@ -38,6 +38,7 @@
             <input
               v-model="adminToken"
               type="password"
+              autocomplete="current-password"
               placeholder="Enter admin token"
               class="w-full rounded-lg border bg-background px-3 py-2"
             />

@@ -5,14 +5,23 @@
         <h1 class="text-3xl font-bold tracking-tight">Projects</h1>
         <p class="text-muted-foreground">Manage your curation projects</p>
       </div>
-      <RouterLink
-        to="/projects/new"
-        class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
-      >
-        <Plus class="h-4 w-4" />
-        New Project
-      </RouterLink>
+      <SplitButton @primary="openAIDialog = true" @secondary="goToManualCreate">
+        <template #primary-icon>
+          <Sparkles class="h-4 w-4" />
+        </template>
+        <template #primary-text>New Project</template>
+        <template #secondary-icon>
+          <Plus class="h-4 w-4" />
+        </template>
+        <template #secondary-text>Manual Setup</template>
+      </SplitButton>
     </div>
+
+    <!-- AI Create Dialog -->
+    <AICreateProjectDialog
+      v-model:open="openAIDialog"
+      @created="handleProjectCreated"
+    />
 
     <!-- Projects List -->
     <div v-if="loading" class="text-center py-12">
@@ -31,12 +40,16 @@
         >
           {{ seeding ? 'Seeding...' : 'Seed Demo Project' }}
         </button>
-        <RouterLink
-          to="/projects/new"
-          class="inline-block rounded-lg bg-primary px-4 py-2 text-primary-foreground"
-        >
-          Create Project
-        </RouterLink>
+        <SplitButton @primary="openAIDialog = true" @secondary="goToManualCreate">
+          <template #primary-icon>
+            <Sparkles class="h-4 w-4" />
+          </template>
+          <template #primary-text>Create Project</template>
+          <template #secondary-icon>
+            <Plus class="h-4 w-4" />
+          </template>
+          <template #secondary-text>Manual Setup</template>
+        </SplitButton>
       </div>
     </div>
 
@@ -93,17 +106,22 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { FolderKanban, Plus } from 'lucide-vue-next'
+import { useRouter } from 'vue-router'
+import { FolderKanban, Plus, Sparkles } from 'lucide-vue-next'
 import { useApiStore } from '@/stores/api'
-import type { ProjectIndex } from '@/types'
+import SplitButton from '@/components/SplitButton.vue'
+import AICreateProjectDialog from '@/components/AICreateProjectDialog.vue'
+import type { ProjectIndex, ProjectConfig } from '@/types'
 import { formatRelativeTime } from '@/lib/utils'
 
+const router = useRouter()
 const apiStore = useApiStore()
 
 const configs = ref<ProjectIndex[]>([])
 const loading = ref(true)
 const seeding = ref(false)
 const activating = ref<string | null>(null)
+const openAIDialog = ref(false)
 
 async function loadProjects() {
   try {
@@ -138,6 +156,19 @@ async function activate(projectId: string) {
     console.error('Failed to activate:', err)
   } finally {
     activating.value = null
+  }
+}
+
+function goToManualCreate() {
+  router.push('/projects/new')
+}
+
+async function handleProjectCreated(config: ProjectConfig) {
+  try {
+    await apiStore.saveConfig(config, true)
+    await loadProjects()
+  } catch (err) {
+    console.error('Failed to create project:', err)
   }
 }
 

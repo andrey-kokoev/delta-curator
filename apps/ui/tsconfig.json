@@ -17,7 +17,10 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@delta-curator/protocol": ["../../packages/protocol/src"],
+      "@delta-curator/runtime": ["../../packages/runtime/src"],
+      "@delta-curator/sdk": ["../../packages/sdk/src"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.vue"],
