@@ -5,12 +5,24 @@
         <h1 class="text-3xl font-bold tracking-tight">Sources</h1>
         <p class="text-muted-foreground">Manage data sources for {{ project?.project_name }}</p>
       </div>
-      <RouterLink
-        :to="`/projects/${projectId}`"
-        class="rounded-lg border px-4 py-2 hover:bg-accent"
-      >
-        Back to Project
-      </RouterLink>
+      <div class="flex items-center gap-2">
+        <SplitButton @primary="openSourceDialog = true" @secondary="addManualSource">
+          <template #primary-icon>
+            <Sparkles class="h-4 w-4" />
+          </template>
+          <template #primary-text>New Source</template>
+          <template #secondary-icon>
+            <Plus class="h-4 w-4" />
+          </template>
+          <template #secondary-text>Create Manually</template>
+        </SplitButton>
+        <RouterLink
+          :to="`/projects/${projectId}`"
+          class="rounded-lg border px-4 py-2 hover:bg-accent"
+        >
+          Back to Project
+        </RouterLink>
+      </div>
     </div>
 
     <div v-if="loading" class="text-center py-12">
@@ -18,6 +30,11 @@
     </div>
 
     <div v-else class="space-y-4">
+      <AICreateSourceDialog
+        v-model:open="openSourceDialog"
+        @created="addGuidedSource"
+      />
+
       <div
         v-for="(source, index) in sources"
         :key="index"
@@ -67,13 +84,6 @@
         </div>
       </div>
 
-      <button
-        @click="addSource"
-        class="w-full rounded-lg border border-dashed p-4 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-      >
-        + Add Source
-      </button>
-
       <div class="flex justify-end gap-4">
         <RouterLink
           :to="`/projects/${projectId}`"
@@ -81,26 +91,21 @@
         >
           Cancel
         </RouterLink>
-        <button
-          @click="saveSources"
-          class="rounded-lg bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
-          :disabled="saving"
-        >
-          {{ saving ? 'Saving...' : 'Save Sources' }}
-        </button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { Plus, Sparkles } from 'lucide-vue-next'
 import { useApiStore } from '@/stores/api'
+import SplitButton from '@/components/SplitButton.vue'
+import AICreateSourceDialog from '@/components/AICreateSourceDialog.vue'
 import type { ProjectConfig, SourceConfig } from '@/types'
 
 const route = useRoute()
-const router = useRouter()
 const apiStore = useApiStore()
 
 const projectId = route.params.id as string
@@ -109,6 +114,47 @@ const sources = ref<SourceConfig[]>([])
 const sourceConfigJson = ref<string[]>([])
 const loading = ref(true)
 const saving = ref(false)
+const openSourceDialog = ref(false)
+const lastSavedSnapshot = ref('[]')
+const hasLoadedInitialState = ref(false)
+let autosaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`)
+    return `{${entries.join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function createSourcesSnapshot(list: SourceConfig[]): string {
+  const normalized = list.map(source => ({
+    id: source.id,
+    plugin: source.plugin,
+    config: source.config ?? {},
+    state: source.state ?? {},
+  }))
+  return stableStringify(normalized)
+}
+
+function queueAutosave() {
+  if (!hasLoadedInitialState.value) return
+  const currentSnapshot = createSourcesSnapshot(sources.value)
+  if (currentSnapshot === lastSavedSnapshot.value) return
+
+  if (autosaveTimer) {
+    clearTimeout(autosaveTimer)
+  }
+
+  autosaveTimer = setTimeout(() => {
+    void persistSources()
+  }, 350)
+}
 
 async function loadProject() {
   try {
@@ -117,6 +163,8 @@ async function loadProject() {
     project.value = result.config
     sources.value = [...result.config.sources]
     sourceConfigJson.value = sources.value.map(s => JSON.stringify(s.config, null, 2))
+    lastSavedSnapshot.value = createSourcesSnapshot(result.config.sources)
+    hasLoadedInitialState.value = true
   } catch (err) {
     console.error('Failed to load project:', err)
   } finally {
@@ -124,13 +172,18 @@ async function loadProject() {
   }
 }
 
-function addSource() {
+function addManualSource() {
   sources.value.push({
     id: '',
     plugin: 'rss_source',
     config: {}
   })
   sourceConfigJson.value.push('{}')
+}
+
+function addGuidedSource(source: SourceConfig) {
+  sources.value.push(source)
+  sourceConfigJson.value.push(JSON.stringify(source.config ?? {}, null, 2))
 }
 
 function removeSource(index: number) {
@@ -146,30 +199,27 @@ function updateSourceConfig(index: number) {
   }
 }
 
-async function saveSources() {
+async function persistSources() {
+  if (!project.value || !hasLoadedInitialState.value) return
+
+  const nextSnapshot = createSourcesSnapshot(sources.value)
+  if (nextSnapshot === lastSavedSnapshot.value) return
+
   try {
     saving.value = true
-    // Update source configs from JSON
-    sources.value.forEach((source, index) => {
-      try {
-        source.config = JSON.parse(sourceConfigJson.value[index])
-      } catch (e) {
-        console.warn('Invalid JSON for source', index)
-      }
-    })
-
-    if (project.value) {
-      project.value.sources = sources.value
-      await apiStore.saveConfig(project.value, false)
-      router.push(`/projects/${projectId}`)
-    }
+    project.value.sources = sources.value
+    await apiStore.saveConfig(project.value, false)
+    lastSavedSnapshot.value = nextSnapshot
   } catch (err) {
-    console.error('Failed to save sources:', err)
-    alert('Failed to save: ' + (err as Error).message)
+    console.error('Failed to auto-save sources:', err)
   } finally {
     saving.value = false
   }
 }
+
+watch(sources, () => {
+  queueAutosave()
+}, { deep: true })
 
 onMounted(loadProject)
 </script>

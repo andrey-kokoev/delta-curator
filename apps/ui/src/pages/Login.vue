@@ -34,9 +34,13 @@
         <!-- Admin Token Login -->
         <form @submit.prevent="handleAdminLogin">
           <div class="space-y-3">
-            <label class="text-sm font-medium">Admin Token</label>
+            <label for="admin-token" class="text-sm font-medium">Admin Token</label>
+            <!-- Hidden username for accessibility -->
+            <input type="hidden" name="username" value="admin" autocomplete="username" />
             <input
+              id="admin-token"
               v-model="adminToken"
+              name="password"
               type="password"
               autocomplete="current-password"
               placeholder="Enter admin token"

@@ -450,6 +450,20 @@ function canonicalJson(obj: unknown): string {
   return JSON.stringify(sortKeys(obj));
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+async function sha256Base64(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return bytesToBase64(new Uint8Array(digest)).replace(/=+$/g, '');
+}
+
 function validateProjectConfig(config: unknown): { success: boolean; data?: ProjectConfig; error?: string } {
   try {
     const c = config as ProjectConfig;
@@ -920,7 +934,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       const payload = item.payload as Record<string, unknown>;
       
       // Generate event ID (simplified - should use proper dual-hash)
-      const eventId = btoa(`${item.source_item_id}:${payload.title || ''}`).slice(0, 43);
+      const eventId = await sha256Base64(`${item.source_item_id}:${canonicalJson(payload)}`);
       
       // Check for existing event
       const existing = await env.DB.prepare(
@@ -942,7 +956,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       
       // Get fingerprints for comparison
       const { results: fingerprints } = await env.DB.prepare(
-        'SELECT fingerprint as payload_hash, event_id FROM fingerprint_index LIMIT 1000'
+        'SELECT fingerprint as payload_hash, first_event_id as event_id FROM fingerprint_index LIMIT 1000'
       ).all<{ payload_hash: string; event_id: string }>();
       
       // Build base views
@@ -963,7 +977,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       }
       
       // Create event
-      const payloadHash = btoa(JSON.stringify(item.payload)).slice(0, 43);
+      const payloadHash = await sha256Base64(canonicalJson(item.payload));
       const event = {
         event_type: 'doc_observed',
         event_version: '1.0',
@@ -1008,6 +1022,21 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     
     // Generate commit ID
     const commitId = crypto.randomUUID();
+
+    // Create commit record first (events has FK -> commits)
+    await env.DB.prepare(
+      `INSERT INTO commits 
+       (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      commitId,
+      traceId,
+      sourceConfig.id,
+      JSON.stringify(batchResult.newState),
+      items.length,
+      events.length,
+      now
+    ).run();
     
     // Write events to D1
     for (const event of events) {
@@ -1035,27 +1064,27 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         for (const facet of event.payload.facets) {
           await env.DB.prepare(
             `INSERT INTO facet_index 
-             (event_id, facet_type, facet_value, confidence)
+             (facet_id, event_id, facet_key, facet_value)
              VALUES (?, ?, ?, ?)`
           ).bind(
+            crypto.randomUUID(),
             event.event_id,
-            facet.type,
-            facet.value,
-            facet.confidence || 1.0
+            facet.type || facet.key || 'facet',
+            typeof facet.value === 'string' ? facet.value : JSON.stringify(facet.value ?? '')
           ).run();
         }
       }
       
       // Index fingerprint
       await env.DB.prepare(
-        `INSERT INTO fingerprint_index 
-         (event_id, fingerprint, algorithm, created_at)
+        `INSERT OR IGNORE INTO fingerprint_index 
+         (fingerprint, source_item_id, payload_hash, first_event_id)
          VALUES (?, ?, ?, ?)`
       ).bind(
-        event.event_id,
         event.payload_hash,
-        'simhash-v1',
-        now
+        event.source_item_id,
+        event.payload_hash,
+        event.event_id
       ).run();
       
       // Add to curated_docs
@@ -1080,21 +1109,6 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         null
       ).run();
     }
-    
-    // Create commit record
-    await env.DB.prepare(
-      `INSERT INTO commits 
-       (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      commitId,
-      traceId,
-      sourceConfig.id,
-      JSON.stringify(batchResult.newState),
-      items.length,
-      events.length,
-      now
-    ).run();
     
     // Update source state
     await env.DB.prepare(
