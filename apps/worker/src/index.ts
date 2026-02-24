@@ -464,6 +464,68 @@ async function sha256Base64(input: string): Promise<string> {
   return bytesToBase64(new Uint8Array(digest)).replace(/=+$/g, '');
 }
 
+async function getTableColumns(env: Env, table: 'commits' | 'source_state' | 'curated_docs'): Promise<Set<string>> {
+  const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+  return new Set((results ?? []).map((row) => row.name));
+}
+
+async function upsertSourceState(
+  env: Env,
+  columns: Set<string>,
+  sourceId: string,
+  state: unknown,
+  now: string,
+  commitInfo?: { commitId: string; commitKey: string }
+): Promise<void> {
+  const stateJson = JSON.stringify(state);
+
+  if (columns.has('last_commit_id') && columns.has('last_commit_key')) {
+    if (commitInfo) {
+      await env.DB.prepare(
+        `INSERT OR REPLACE INTO source_state
+         (source_id, state, last_commit_id, last_commit_key, updated_at)
+         VALUES (?, ?, ?, ?, ?)`
+      ).bind(
+        sourceId,
+        stateJson,
+        commitInfo.commitId,
+        commitInfo.commitKey,
+        now
+      ).run();
+      return;
+    }
+
+    const existing = await env.DB.prepare(
+      `SELECT source_id FROM source_state WHERE source_id = ?`
+    ).bind(sourceId).first();
+
+    if (existing) {
+      await env.DB.prepare(
+        `UPDATE source_state
+         SET state = ?, updated_at = ?
+         WHERE source_id = ?`
+      ).bind(
+        stateJson,
+        now,
+        sourceId
+      ).run();
+    }
+    return;
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO source_state (source_id, state, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(source_id) DO UPDATE SET
+       state = excluded.state,
+       updated_at = excluded.updated_at`
+  ).bind(
+    sourceId,
+    stateJson,
+    now
+  ).run();
+}
+
 function validateProjectConfig(config: unknown): { success: boolean; data?: ProjectConfig; error?: string } {
   try {
     const c = config as ProjectConfig;
@@ -901,6 +963,10 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   const traceId = crypto.randomUUID();
   
   try {
+    const commitColumns = await getTableColumns(env, 'commits');
+    const sourceStateColumns = await getTableColumns(env, 'source_state');
+    const curatedDocColumns = await getTableColumns(env, 'curated_docs');
+
     // Get source state
     const { results: stateResults } = await env.DB.prepare(
       'SELECT state FROM source_state WHERE source_id = ?'
@@ -997,17 +1063,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     
     if (events.length === 0) {
       // Update source state even if no new events
-      await env.DB.prepare(
-        `INSERT INTO source_state (source_id, state, updated_at) 
-         VALUES (?, ?, ?)
-         ON CONFLICT(source_id) DO UPDATE SET 
-           state = excluded.state,
-           updated_at = excluded.updated_at`
-      ).bind(
+      await upsertSourceState(
+        env,
+        sourceStateColumns,
         sourceConfig.id,
-        JSON.stringify(batchResult.newState),
+        batchResult.newState,
         now
-      ).run();
+      );
       
       return new Response(JSON.stringify({ 
         commit_id: null,
@@ -1022,21 +1084,48 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     
     // Generate commit ID
     const commitId = crypto.randomUUID();
+    const oldStateJson = JSON.stringify(sourceState);
+    const newStateJson = JSON.stringify(batchResult.newState);
+    const commitKey = await sha256Base64(
+      `${sourceConfig.id}:${oldStateJson}:${events.map((e) => e.source_item_id).join('|')}`
+    );
 
     // Create commit record first (events has FK -> commits)
-    await env.DB.prepare(
-      `INSERT INTO commits 
-       (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      commitId,
-      traceId,
-      sourceConfig.id,
-      JSON.stringify(batchResult.newState),
-      items.length,
-      events.length,
-      now
-    ).run();
+    if (commitColumns.has('source_state')) {
+      await env.DB.prepare(
+        `INSERT INTO commits 
+         (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        commitId,
+        traceId,
+        sourceConfig.id,
+        newStateJson,
+        items.length,
+        events.length,
+        now
+      ).run();
+    } else if (
+      commitColumns.has('commit_key') &&
+      commitColumns.has('old_state') &&
+      commitColumns.has('new_state')
+    ) {
+      await env.DB.prepare(
+        `INSERT INTO commits
+         (commit_id, commit_key, trace_id, source_id, old_state, new_state, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        commitId,
+        commitKey,
+        traceId,
+        sourceConfig.id,
+        oldStateJson,
+        newStateJson,
+        now
+      ).run();
+    } else {
+      throw new Error('Unsupported commits table schema');
+    }
     
     // Write events to D1
     for (const event of events) {
@@ -1089,7 +1178,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       
       // Add to curated_docs
       const payload = event.payload as any;
-      await env.DB.prepare(
+      const insertCuratedRich = () => env.DB.prepare(
         `INSERT INTO curated_docs 
          (doc_id, event_id, content_hash, rank_score, source_url, title, 
           summary, entities, published_at, fetched_at, held, held_until)
@@ -1108,20 +1197,45 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         0,
         null
       ).run();
+
+      const insertCuratedLegacy = () => env.DB.prepare(
+        `INSERT OR REPLACE INTO curated_docs
+         (doc_id, source_item_id, payload, last_event_id)
+         VALUES (?, ?, ?, ?)`
+      ).bind(
+        crypto.randomUUID(),
+        event.source_item_id,
+        JSON.stringify(payload),
+        event.event_id
+      ).run();
+
+      try {
+        if (curatedDocColumns.has('event_id')) {
+          await insertCuratedRich();
+        } else {
+          await insertCuratedLegacy();
+        }
+      } catch (err: any) {
+        const message = String(err?.message || err);
+        if (message.includes('no column named event_id')) {
+          await insertCuratedLegacy();
+        } else if (message.includes('no column named source_item_id')) {
+          await insertCuratedRich();
+        } else {
+          throw err;
+        }
+      }
     }
     
     // Update source state
-    await env.DB.prepare(
-      `INSERT INTO source_state (source_id, state, updated_at) 
-       VALUES (?, ?, ?)
-       ON CONFLICT(source_id) DO UPDATE SET 
-         state = excluded.state,
-         updated_at = excluded.updated_at`
-    ).bind(
+    await upsertSourceState(
+      env,
+      sourceStateColumns,
       sourceConfig.id,
-      JSON.stringify(batchResult.newState),
-      now
-    ).run();
+      batchResult.newState,
+      now,
+      { commitId, commitKey }
+    );
     
     return new Response(JSON.stringify({ 
       commit_id: commitId,

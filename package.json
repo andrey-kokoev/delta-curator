@@ -12,7 +12,7 @@
     "predev:ui": "bash -lc 'if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:5173 | xargs -r kill -9; elif command -v fuser >/dev/null 2>&1; then fuser -k 5173/tcp || true; fi'",
     "dev:ui": "pnpm -F @delta-curator/ui run dev",
     "predev:worker": "bash -lc 'if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:8787 | xargs -r kill -9; elif command -v fuser >/dev/null 2>&1; then fuser -k 8787/tcp || true; fi'",
-    "dev:worker": "pnpm -F @delta-curator/worker exec wrangler dev --port 8787",
+    "dev:worker": "pnpm -F @delta-curator/worker exec wrangler dev --remote --port 8787",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
