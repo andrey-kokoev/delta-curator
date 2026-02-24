@@ -1,22 +1,18 @@
 <template>
   <div class="space-y-6">
     <div>
-      <h1 class="text-3xl font-bold tracking-tight">Run Batch</h1>
-      <p class="text-muted-foreground">Process new items from sources</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ activeProject?.config.project_name || projectId }}</h1>
+      <p class="text-muted-foreground">{{ activeProject?.config.project_id || projectId }}</p>
     </div>
 
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
 
-    <!-- Project Info -->
-    <div v-if="activeProject" class="rounded-lg border bg-card p-6">
-      <h2 class="text-lg font-semibold">Project</h2>
-      <p class="text-muted-foreground">{{ activeProject.config.project_name }}</p>
-      <p class="text-sm text-muted-foreground mt-1">
-        {{ activeProject.config.sources.length }} sources available
-      </p>
+    <div>
+      <h2 class="text-2xl font-semibold tracking-tight">Run Batch</h2>
+      <p class="text-muted-foreground">Process new items from sources</p>
     </div>
 
-    <div v-else class="rounded-lg border border-destructive bg-destructive/10 p-6">
+    <div v-if="!activeProject" class="rounded-lg border border-destructive bg-destructive/10 p-6">
       <p class="text-destructive">No project configured</p>
       <RouterLink to="/projects" class="text-primary hover:underline">Select a project</RouterLink>
     </div>
@@ -63,7 +59,10 @@
       </button>
 
       <div class="border-t pt-4 space-y-2">
-        <label class="text-sm font-medium">Cursor Published At (UTC)</label>
+        <label class="text-sm font-medium">Next Run Date Filter (UTC)</label>
+        <p class="text-xs text-muted-foreground">
+          For RSS sources, next run only considers items where <span class="font-mono">pubDate</span> is after this value.
+        </p>
         <input
           v-model="cursorPublishedAt"
           type="datetime-local"
@@ -76,14 +75,14 @@
             class="flex-1 rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
             :disabled="!sourceId || !cursorPublishedAt || updatingCursor"
           >
-            {{ updatingCursor ? 'Saving...' : 'Set Cursor' }}
+            {{ updatingCursor ? 'Saving...' : 'Use This Date' }}
           </button>
           <button
             @click="clearCursor"
             class="flex-1 rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
             :disabled="!sourceId || updatingCursor"
           >
-            Clear Cursor
+            Remove Date Filter
           </button>
         </div>
       </div>
@@ -132,8 +131,22 @@ const sourceId = ref('')
 const maxItems = ref(50)
 const running = ref(false)
 const updatingCursor = ref(false)
-const cursorPublishedAt = ref('')
+const cursorPublishedAt = ref(defaultDateFilterValue())
 const result = ref<{ commit_id: string | null; items_processed: number; events_written: number; trace_id?: string } | null>(null)
+
+function defaultDateFilterValue(): string {
+  const now = new Date()
+  const startOfDayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+  const local = new Date(startOfDayLocal.getTime() - startOfDayLocal.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
+
+function formatUtcMinute(value: string | null | undefined): string {
+  if (!value) return 'not set'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${date.toISOString().slice(0, 16)}Z`
+}
 
 async function loadActiveProject() {
   try {
@@ -172,10 +185,10 @@ async function setCursor() {
     updatingCursor.value = true
     const cursorIso = new Date(cursorPublishedAt.value).toISOString()
     const response = await apiStore.updateSourceCursor(sourceId.value, cursorIso, true, projectId)
-    alert(`Cursor updated for ${response.source_id} to ${response.cursor_published_at}`)
+    alert(`Next run filter updated for ${response.source_id}: RSS pubDate after ${formatUtcMinute(response.cursor_published_at)}`)
   } catch (err) {
     console.error('Set cursor failed:', err)
-    alert('Set cursor failed: ' + (err as Error).message)
+    alert('Updating next-run date filter failed: ' + (err as Error).message)
   } finally {
     updatingCursor.value = false
   }
@@ -188,10 +201,10 @@ async function clearCursor() {
     updatingCursor.value = true
     const response = await apiStore.updateSourceCursor(sourceId.value, null, true, projectId)
     cursorPublishedAt.value = ''
-    alert(`Cursor cleared for ${response.source_id}`)
+    alert(`Next run date filter removed for ${response.source_id}`)
   } catch (err) {
     console.error('Clear cursor failed:', err)
-    alert('Clear cursor failed: ' + (err as Error).message)
+    alert('Removing next-run date filter failed: ' + (err as Error).message)
   } finally {
     updatingCursor.value = false
   }

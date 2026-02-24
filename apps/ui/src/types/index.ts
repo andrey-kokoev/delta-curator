@@ -148,3 +148,21 @@ export interface InspectResult {
   sources: InspectSourceCursor[]
   markdown: string
 }
+
+export interface SourceRunSummary {
+  commit_id: string
+  trace_id: string
+  source_id: string
+  item_count: number | null
+  event_count: number | null
+  run_at: string | null
+}
+
+export interface SourceRunsResult {
+  project_id: string
+  source_id?: string
+  limit: number
+  runs: SourceRunSummary[]
+  total: number
+  took_ms: number
+}

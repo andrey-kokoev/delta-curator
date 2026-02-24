@@ -7,7 +7,8 @@ import type {
   SearchResult, 
   HealthStatus,
   RunResult,
-  InspectResult
+  InspectResult,
+  SourceRunsResult
 } from '@/types'
 
 // API base URL from environment
@@ -205,6 +206,23 @@ export const useApiStore = defineStore('api', () => {
     return response.json() as Promise<InspectResult>
   }
 
+  async function listRuns(options: {
+    projectId: string
+    sourceId?: string
+    limit?: number
+  }): Promise<SourceRunsResult> {
+    const params = new URLSearchParams({
+      project_id: options.projectId,
+      limit: String(options.limit ?? 5)
+    })
+
+    if (options.sourceId) {
+      params.set('source_id', options.sourceId)
+    }
+
+    return fetchApi(`/runs?${params.toString()}`)
+  }
+
   async function getHealth(): Promise<HealthStatus> {
     return fetchApi('/health')
   }
@@ -234,6 +252,7 @@ export const useApiStore = defineStore('api', () => {
     searchScoped,
     listContent,
     inspect,
+    listRuns,
     getHealth,
     seedConfig
   }

@@ -54,46 +54,28 @@
     </div>
 
     <div v-else class="grid gap-4">
-      <div
+      <RouterLink
         v-for="config in configs"
         :key="config.project_id"
-        class="rounded-lg border bg-card p-6"
+        :to="`/projects/${config.project_id}`"
+        class="rounded-lg border bg-card p-6 cursor-pointer hover:bg-accent/40 hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <div class="flex items-start justify-between">
-          <div class="flex items-start gap-4">
-            <div class="rounded-lg bg-primary/10 p-3">
-              <FolderKanban class="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <div class="flex items-center gap-2">
-                <h3 class="font-semibold">{{ config.project_name }}</h3>
-              </div>
-              <p class="text-sm text-muted-foreground">{{ config.project_id }}</p>
-              <div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">
-                <span>v{{ config.version }}</span>
-                <span>Updated {{ formatRelativeTime(config.updated_at) }}</span>
-              </div>
-            </div>
+        <div class="flex items-start gap-4">
+          <div class="rounded-lg bg-primary/10 p-3">
+            <FolderKanban class="h-6 w-6 text-primary" />
           </div>
-          
-          <div class="flex items-center gap-2">
-            <button
-              v-if="!config.is_active"
-              @click="activate(config.project_id)"
-              class="rounded-lg border px-3 py-1.5 text-sm hover:bg-accent"
-              :disabled="activating === config.project_id"
-            >
-              {{ activating === config.project_id ? 'Activating...' : 'Activate' }}
-            </button>
-            <RouterLink
-              :to="`/projects/${config.project_id}`"
-              class="rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
-            >
-              View
-            </RouterLink>
+          <div>
+            <div class="flex items-center gap-2">
+              <h3 class="font-semibold">{{ config.project_name }}</h3>
+            </div>
+            <p class="text-sm text-muted-foreground">{{ config.project_id }}</p>
+            <div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">
+              <span>v{{ config.version }}</span>
+              <span>Updated {{ formatRelativeTime(config.updated_at) }}</span>
+            </div>
           </div>
         </div>
-      </div>
+      </RouterLink>
     </div>
   </div>
 </template>
@@ -115,7 +97,6 @@ const apiStore = useApiStore()
 const configs = ref<ProjectIndex[]>([])
 const loading = ref(true)
 const seeding = ref(false)
-const activating = ref<string | null>(null)
 const openAIDialog = ref(false)
 
 async function loadProjects() {
@@ -139,18 +120,6 @@ async function seedProject() {
     console.error('Failed to seed project:', err)
   } finally {
     seeding.value = false
-  }
-}
-
-async function activate(projectId: string) {
-  try {
-    activating.value = projectId
-    await apiStore.activateConfig(projectId)
-    await loadProjects()
-  } catch (err) {
-    console.error('Failed to activate:', err)
-  } finally {
-    activating.value = null
   }
 }
 

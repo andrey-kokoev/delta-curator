@@ -52,9 +52,10 @@ The repository is not worker-only; UI and project-scoped UX are part of the curr
 The following now require explicit `project_id`:
 
 - `POST /run` body requires `project_id`
+- `GET /runs` query requires `project_id`
 - `GET /inspect` query requires `project_id`
 - `GET /search` query requires `project_id`
-- `POST /sources/cursor` body requires `project_id` and admin auth
+- `POST /sources/cursor` body requires `project_id` and authentication
 
 Project-scoped operation endpoints intentionally no longer rely on implicit active-project fallback.
 

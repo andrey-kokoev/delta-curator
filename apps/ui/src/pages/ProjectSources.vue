@@ -1,9 +1,16 @@
 <template>
   <div class="space-y-6">
+    <div>
+      <h1 class="text-3xl font-bold tracking-tight">{{ project?.project_name || projectId }}</h1>
+      <p class="text-muted-foreground">{{ project?.project_id || projectId }}</p>
+    </div>
+
+    <ProjectSubnav :project-id="projectId" />
+
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold tracking-tight">Sources</h1>
-        <p class="text-muted-foreground">Manage data sources for {{ project?.project_name }}</p>
+        <h2 class="text-2xl font-semibold tracking-tight">Sources</h2>
+        <p class="text-muted-foreground">Manage data sources</p>
       </div>
       <div class="flex items-center gap-2">
         <SplitButton @primary="openSourceDialog = true" @secondary="addManualSource">
@@ -18,8 +25,6 @@
         </SplitButton>
       </div>
     </div>
-
-    <ProjectSubnav :project-id="projectId" />
 
     <div v-if="loading" class="text-center py-12">
       <p class="text-muted-foreground">Loading...</p>
@@ -79,6 +84,34 @@
         </div>
 
         <div class="mt-4 space-y-2">
+          <p class="text-xs text-muted-foreground">
+            Next run rule: RSS pubDate after {{ formatUtcMinute(sourceCursors[source.id]?.cursor_published_at) }}
+          </p>
+          <div class="flex flex-col gap-2 md:flex-row">
+            <input
+              v-model="cursorInputs[source.id]"
+              type="datetime-local"
+              class="w-full rounded-lg border bg-background px-3 py-2"
+              :disabled="!source.id || updatingSourceId === source.id"
+            />
+            <button
+              class="rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+              :disabled="!source.id || !cursorInputs[source.id] || updatingSourceId === source.id"
+              @click="setCursor(source.id)"
+            >
+              {{ updatingSourceId === source.id ? 'Saving...' : 'Use This Date' }}
+            </button>
+            <button
+              class="rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+              :disabled="!source.id || updatingSourceId === source.id"
+              @click="clearCursor(source.id)"
+            >
+              Remove Date Filter
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-4 space-y-2">
           <label class="text-sm">Configuration (JSON)</label>
           <textarea
             v-model="sourceConfigJson[index]"
@@ -86,6 +119,32 @@
             class="w-full rounded-lg border bg-background px-3 py-2 font-mono text-xs"
             @change="updateSourceConfig(index)"
           ></textarea>
+        </div>
+
+        <div class="mt-4 space-y-2 border-t pt-4">
+          <div class="flex items-center justify-between">
+            <p class="text-sm font-medium">Runs</p>
+            <button
+              class="rounded-lg border px-3 py-1.5 text-sm hover:bg-accent"
+              :disabled="!source.id || runningSourceId === source.id"
+              @click="runSourceNow(source.id)"
+            >
+              {{ runningSourceId === source.id ? 'Running…' : 'Run Now' }}
+            </button>
+          </div>
+
+          <div v-if="(sourceRuns[source.id] || []).length === 0" class="text-xs text-muted-foreground">
+            No runs yet.
+          </div>
+          <ul v-else class="space-y-1 text-xs text-muted-foreground">
+            <li
+              v-for="run in sourceRuns[source.id]"
+              :key="run.commit_id"
+              class="rounded bg-muted/60 px-2 py-1"
+            >
+              {{ formatRunTime(run.run_at) }} · items {{ run.item_count ?? 'n/a' }} · events {{ run.event_count ?? 'n/a' }}
+            </li>
+          </ul>
         </div>
       </div>
 
@@ -101,7 +160,8 @@ import { useApiStore } from '@/stores/api'
 import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import SplitButton from '@/components/SplitButton.vue'
 import AICreateSourceDialog from '@/components/AICreateSourceDialog.vue'
-import type { ProjectConfig, SourceConfig } from '@/types'
+import { formatRelativeTime } from '@/lib/utils'
+import type { ProjectConfig, SourceConfig, InspectResult, InspectSourceCursor, SourceRunSummary } from '@/types'
 
 const route = useRoute()
 const apiStore = useApiStore()
@@ -115,7 +175,78 @@ const saving = ref(false)
 const openSourceDialog = ref(false)
 const lastSavedSnapshot = ref('[]')
 const hasLoadedInitialState = ref(false)
+const sourceCursors = ref<Record<string, InspectSourceCursor>>({})
+const sourceRuns = ref<Record<string, SourceRunSummary[]>>({})
+const cursorInputs = ref<Record<string, string>>({})
+const updatingSourceId = ref<string | null>(null)
+const runningSourceId = ref<string | null>(null)
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function isoToDatetimeLocal(value: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
+
+function formatUtcMinute(value: string | null | undefined): string {
+  if (!value) return 'not set'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${date.toISOString().slice(0, 16)}Z`
+}
+
+async function loadSourceCursors() {
+  try {
+    const result = await apiStore.inspect('PT24H', 'json', projectId) as InspectResult
+    const byId: Record<string, InspectSourceCursor> = {}
+    const inputs: Record<string, string> = {}
+
+    for (const source of result.sources || []) {
+      byId[source.source_id] = source
+      inputs[source.source_id] = isoToDatetimeLocal(source.cursor_published_at)
+    }
+
+    sourceCursors.value = byId
+    cursorInputs.value = inputs
+  } catch (err) {
+    console.error('Failed to load source cursors:', err)
+    sourceCursors.value = {}
+    cursorInputs.value = {}
+  }
+}
+
+async function loadSourceRuns() {
+  try {
+    const bySource: Record<string, SourceRunSummary[]> = {}
+
+    for (const source of sources.value) {
+      if (!source.id) continue
+
+      const result = await apiStore.listRuns({
+        projectId,
+        sourceId: source.id,
+        limit: 5
+      })
+
+      bySource[source.id] = result.runs || []
+    }
+
+    sourceRuns.value = bySource
+  } catch (err) {
+    console.error('Failed to load source runs:', err)
+    sourceRuns.value = {}
+  }
+}
+
+function formatRunTime(value: string | null): string {
+  if (!value) return 'unknown time'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${formatRelativeTime(date)} (${date.toISOString().slice(0, 16)}Z)`
+}
 
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
@@ -167,10 +298,61 @@ async function loadProject() {
     sourceConfigJson.value = sources.value.map(s => JSON.stringify(s.config, null, 2))
     lastSavedSnapshot.value = createSourcesSnapshot(result.config.sources)
     hasLoadedInitialState.value = true
+    await loadSourceCursors()
+    await loadSourceRuns()
   } catch (err) {
     console.error('Failed to load project:', err)
   } finally {
     loading.value = false
+  }
+}
+
+async function runSourceNow(sourceId: string) {
+  if (!sourceId) return
+
+  try {
+    runningSourceId.value = sourceId
+    const result = await apiStore.runBatch(sourceId, 50, projectId)
+    await loadSourceCursors()
+    await loadSourceRuns()
+    alert(`Run completed for ${sourceId}: ${result.items_processed} items, ${result.events_written} events`)
+  } catch (err) {
+    console.error('Run failed:', err)
+    alert('Run failed: ' + (err as Error).message)
+  } finally {
+    runningSourceId.value = null
+  }
+}
+
+async function setCursor(sourceId: string) {
+  const input = cursorInputs.value[sourceId]
+  if (!sourceId || !input) return
+
+  try {
+    updatingSourceId.value = sourceId
+    const cursorIso = new Date(input).toISOString()
+    await apiStore.updateSourceCursor(sourceId, cursorIso, true, projectId)
+    await loadSourceCursors()
+  } catch (err) {
+    console.error('Failed to set cursor:', err)
+    alert('Failed to update next-run date filter: ' + (err as Error).message)
+  } finally {
+    updatingSourceId.value = null
+  }
+}
+
+async function clearCursor(sourceId: string) {
+  if (!sourceId) return
+
+  try {
+    updatingSourceId.value = sourceId
+    await apiStore.updateSourceCursor(sourceId, null, true, projectId)
+    await loadSourceCursors()
+  } catch (err) {
+    console.error('Failed to clear cursor:', err)
+    alert('Failed to remove next-run date filter: ' + (err as Error).message)
+  } finally {
+    updatingSourceId.value = null
   }
 }
 

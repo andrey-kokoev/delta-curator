@@ -53,9 +53,10 @@ Primary runtime: **Cloudflare Workers**
 The endpoints below require explicit project context:
 
 - `POST /run` with JSON body containing `project_id`
+- `GET /runs` with query param `project_id` (optional `source_id`, `limit`)
 - `GET /inspect` with query param `project_id`
 - `GET /search` with query param `project_id`
-- `POST /sources/cursor` with JSON body containing `project_id` (admin auth required)
+- `POST /sources/cursor` with JSON body containing `project_id` (authentication required)
 
 Examples:
 
@@ -63,6 +64,8 @@ Examples:
 curl -X POST http://localhost:8787/run \
   -H "Content-Type: application/json" \
   -d '{"project_id":"quickstart-demo","source_id":"demo-rss-source","max_items":50,"once":true}'
+
+curl "http://localhost:8787/runs?project_id=quickstart-demo&source_id=demo-rss-source&limit=5"
 
 curl "http://localhost:8787/inspect?since=PT24H&format=json&project_id=quickstart-demo"
 

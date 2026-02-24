@@ -1,13 +1,16 @@
 <template>
   <div class="space-y-6">
-    <div class="flex items-center justify-between">
-      <div>
-        <h1 class="text-3xl font-bold tracking-tight">Pipeline</h1>
-        <p class="text-muted-foreground">Configure processing pipeline</p>
-      </div>
+    <div>
+      <h1 class="text-3xl font-bold tracking-tight">{{ project?.project_name || projectId }}</h1>
+      <p class="text-muted-foreground">{{ project?.project_id || projectId }}</p>
     </div>
 
     <ProjectSubnav :project-id="projectId" />
+
+    <div>
+      <h2 class="text-2xl font-semibold tracking-tight">Pipeline</h2>
+      <p class="text-muted-foreground">Configure processing pipeline</p>
+    </div>
 
     <div v-if="loading" class="text-center py-12">
       <p class="text-muted-foreground">Loading...</p>

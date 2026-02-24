@@ -25,14 +25,6 @@
         >
           {{ deleting ? 'Deleting...' : 'Delete' }}
         </button>
-        <button
-          v-if="!project.index.is_active"
-          @click="activate"
-          class="rounded-lg border px-4 py-2 hover:bg-accent"
-          :disabled="activating"
-        >
-          {{ activating ? 'Activating...' : 'Activate' }}
-        </button>
         <RouterLink
           :to="`/projects/${project.config.project_id}/edit`"
           class="rounded-lg bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
@@ -75,15 +67,51 @@
         <div
           v-for="source in project.config.sources"
           :key="source.id"
-          class="p-4 flex items-center justify-between"
+          class="p-4 space-y-3"
         >
-          <div>
-            <p class="font-medium">{{ source.id }}</p>
-            <p class="text-sm text-muted-foreground">{{ source.plugin }}</p>
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <p class="font-medium">{{ source.id }}</p>
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="source.enabled === false ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'"
+                >
+                  {{ source.enabled === false ? 'Paused' : 'Enabled' }}
+                </span>
+              </div>
+              <p class="text-sm text-muted-foreground">{{ source.plugin }}</p>
+              <p class="text-xs text-muted-foreground">
+                Next run rule: RSS pubDate after {{ formatUtcMinute(sourceCursors[source.id]?.cursor_published_at) }}
+              </p>
+            </div>
+            <code class="text-xs bg-muted px-2 py-1 rounded">
+              {{ JSON.stringify(source.config).slice(0, 50) }}...
+            </code>
           </div>
-          <code class="text-xs bg-muted px-2 py-1 rounded">
-            {{ JSON.stringify(source.config).slice(0, 50) }}...
-          </code>
+
+          <div class="flex flex-col gap-2 md:flex-row">
+            <input
+              v-model="cursorInputs[source.id]"
+              type="datetime-local"
+              class="w-full rounded-lg border bg-background px-3 py-2"
+              :disabled="updatingSourceId === source.id"
+            />
+            <button
+              class="rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+              :disabled="!cursorInputs[source.id] || updatingSourceId === source.id"
+              @click="setCursor(source.id)"
+            >
+              {{ updatingSourceId === source.id ? 'Saving...' : 'Use This Date' }}
+            </button>
+            <button
+              class="rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+              :disabled="updatingSourceId === source.id"
+              @click="clearCursor(source.id)"
+            >
+              Remove Date Filter
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -184,7 +212,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useApiStore } from '@/stores/api'
 import ProjectSubnav from '@/components/ProjectSubnav.vue'
-import type { ProjectConfig, ProjectIndex } from '@/types'
+import type { ProjectConfig, ProjectIndex, InspectResult, InspectSourceCursor } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -193,13 +221,52 @@ const apiStore = useApiStore()
 const projectId = route.params.id as string
 const project = ref<{ config: ProjectConfig; index: ProjectIndex } | null>(null)
 const loading = ref(true)
-const activating = ref(false)
 const deleting = ref(false)
+const sourceCursors = ref<Record<string, InspectSourceCursor>>({})
+const cursorInputs = ref<Record<string, string>>({})
+const updatingSourceId = ref<string | null>(null)
+
+function isoToDatetimeLocal(value: string | null): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
+
+function formatUtcMinute(value: string | null | undefined): string {
+  if (!value) return 'not set'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${date.toISOString().slice(0, 16)}Z`
+}
+
+async function loadSourceCursors() {
+  try {
+    const result = await apiStore.inspect('PT24H', 'json', projectId) as InspectResult
+    const byId: Record<string, InspectSourceCursor> = {}
+    const inputs: Record<string, string> = {}
+
+    for (const source of result.sources || []) {
+      byId[source.source_id] = source
+      inputs[source.source_id] = isoToDatetimeLocal(source.cursor_published_at)
+    }
+
+    sourceCursors.value = byId
+    cursorInputs.value = inputs
+  } catch (err) {
+    console.error('Failed to load source cursors:', err)
+    sourceCursors.value = {}
+    cursorInputs.value = {}
+  }
+}
 
 async function loadProject() {
   try {
     loading.value = true
     project.value = await apiStore.getConfig(projectId)
+    await loadSourceCursors()
   } catch (err) {
     console.error('Failed to load project:', err)
   } finally {
@@ -207,15 +274,33 @@ async function loadProject() {
   }
 }
 
-async function activate() {
+async function setCursor(sourceId: string) {
+  const input = cursorInputs.value[sourceId]
+  if (!input) return
+
   try {
-    activating.value = true
-    await apiStore.activateConfig(projectId)
-    await loadProject()
+    updatingSourceId.value = sourceId
+    const cursorIso = new Date(input).toISOString()
+    await apiStore.updateSourceCursor(sourceId, cursorIso, true, projectId)
+    await loadSourceCursors()
   } catch (err) {
-    console.error('Failed to activate:', err)
+    console.error('Failed to set cursor:', err)
+    alert('Failed to update next-run date filter: ' + (err as Error).message)
   } finally {
-    activating.value = false
+    updatingSourceId.value = null
+  }
+}
+
+async function clearCursor(sourceId: string) {
+  try {
+    updatingSourceId.value = sourceId
+    await apiStore.updateSourceCursor(sourceId, null, true, projectId)
+    await loadSourceCursors()
+  } catch (err) {
+    console.error('Failed to clear cursor:', err)
+    alert('Failed to remove next-run date filter: ' + (err as Error).message)
+  } finally {
+    updatingSourceId.value = null
   }
 }
 

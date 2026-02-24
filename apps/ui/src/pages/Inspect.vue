@@ -1,11 +1,16 @@
 <template>
   <div class="space-y-6">
     <div>
-      <h1 class="text-3xl font-bold tracking-tight">Inspect</h1>
-      <p class="text-muted-foreground">View system digest and logs</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ project?.config.project_name || projectId }}</h1>
+      <p class="text-muted-foreground">{{ project?.config.project_id || projectId }}</p>
     </div>
 
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
+
+    <div>
+      <h2 class="text-2xl font-semibold tracking-tight">Inspect</h2>
+      <p class="text-muted-foreground">View system digest and logs</p>
+    </div>
 
     <!-- Controls -->
     <div class="flex items-center gap-4">
@@ -28,9 +33,9 @@
       </button>
     </div>
 
-    <!-- Cursor Controls -->
+    <!-- Next-Run Filter Controls -->
     <div v-if="sources.length > 0" class="rounded-lg border bg-card p-6 space-y-4">
-      <h2 class="text-lg font-semibold">Source Cursors</h2>
+      <h2 class="text-lg font-semibold">Next Run Date Filters</h2>
       <div class="space-y-4">
         <div
           v-for="source in sources"
@@ -53,7 +58,7 @@
               </p>
             </div>
             <p class="text-xs text-muted-foreground">
-              Current: {{ source.cursor_published_at || 'none' }}
+              Rule: RSS pubDate after {{ formatUtcMinute(source.cursor_published_at) }}
             </p>
           </div>
 
@@ -106,7 +111,7 @@ import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useApiStore } from '@/stores/api'
 import ProjectSubnav from '@/components/ProjectSubnav.vue'
-import type { InspectResult, InspectSourceCursor } from '@/types'
+import type { InspectResult, InspectSourceCursor, ProjectConfig } from '@/types'
 
 const apiStore = useApiStore()
 const route = useRoute()
@@ -117,8 +122,18 @@ const since = ref('PT24H')
 const loading = ref(false)
 const digest = ref<string | null>(null)
 const sources = ref<InspectSourceCursor[]>([])
+const project = ref<{ config: ProjectConfig } | null>(null)
 const cursorInputs = ref<Record<string, string>>({})
 const updatingSourceId = ref<string | null>(null)
+
+async function loadProjectContext() {
+  if (!projectId) return
+  try {
+    project.value = await apiStore.getConfig(projectId)
+  } catch (err) {
+    console.error('Failed to load project context:', err)
+  }
+}
 
 function isoToDatetimeLocal(value: string | null): string {
   if (!value) return ''
@@ -127,6 +142,13 @@ function isoToDatetimeLocal(value: string | null): string {
 
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
   return local.toISOString().slice(0, 16)
+}
+
+function formatUtcMinute(value: string | null | undefined): string {
+  if (!value) return 'not set'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${date.toISOString().slice(0, 16)}Z`
 }
 
 async function loadDigest() {
@@ -161,7 +183,7 @@ async function setCursor(sourceId: string) {
     await loadDigest()
   } catch (err) {
     console.error('Failed to set cursor:', err)
-    alert('Failed to set cursor: ' + (err as Error).message)
+    alert('Failed to update next-run date filter: ' + (err as Error).message)
   } finally {
     updatingSourceId.value = null
   }
@@ -174,7 +196,7 @@ async function clearCursor(sourceId: string) {
     await loadDigest()
   } catch (err) {
     console.error('Failed to clear cursor:', err)
-    alert('Failed to clear cursor: ' + (err as Error).message)
+    alert('Failed to remove next-run date filter: ' + (err as Error).message)
   } finally {
     updatingSourceId.value = null
   }
@@ -194,5 +216,8 @@ function downloadDigest() {
   URL.revokeObjectURL(url)
 }
 
-onMounted(loadDigest)
+onMounted(async () => {
+  await loadProjectContext()
+  await loadDigest()
+})
 </script>

@@ -1,7 +1,14 @@
 <template>
   <div class="max-w-2xl mx-auto space-y-6">
     <div>
-      <h1 class="text-3xl font-bold tracking-tight">Edit Project</h1>
+      <h1 class="text-3xl font-bold tracking-tight">{{ form.project_name || projectId }}</h1>
+      <p class="text-muted-foreground">{{ form.project_id || projectId }}</p>
+    </div>
+
+    <ProjectSubnav :project-id="projectId" />
+
+    <div>
+      <h2 class="text-2xl font-semibold tracking-tight">Edit Project</h2>
       <p class="text-muted-foreground">Update project configuration</p>
     </div>
 
@@ -81,6 +88,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useApiStore } from '@/stores/api'
+import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import type { ProjectConfig } from '@/types'
 
 const route = useRoute()

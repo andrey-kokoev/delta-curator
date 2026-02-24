@@ -1090,8 +1090,12 @@ async function handleConfigDeleteRoute(env: Env, projectId: string, version: str
 }
 
 async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promise<Response> {
-  if (!(await isAdminRequest(request, env))) {
-    return new Response(JSON.stringify({ error: 'Admin authentication required' }), {
+  const hasAdminAccess = await isAdminRequest(request, env);
+  const session = await getSession(request, env);
+  const hasSessionAccess = Boolean(session?.user);
+
+  if (!hasAdminAccess && !hasSessionAccess) {
+    return new Response(JSON.stringify({ error: 'Authentication required' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
     });
@@ -2081,6 +2085,134 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
   }
 }
 
+async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
+  const startTime = Date.now();
+  const url = new URL(request.url);
+  const projectId = (url.searchParams.get('project_id') || '').trim();
+  const sourceId = (url.searchParams.get('source_id') || '').trim();
+  const limit = Math.max(1, Math.min(parseInt(url.searchParams.get('limit') || '5', 10), 50));
+
+  if (!projectId) {
+    return new Response(JSON.stringify({
+      error: 'project_id is required',
+      runs: [],
+      total: 0,
+      took_ms: Date.now() - startTime
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  try {
+    const configResult = await readConfig(env, projectId);
+    if (configResult.error || !configResult.config) {
+      return new Response(JSON.stringify({
+        error: configResult.error || `Unknown project_id: ${projectId}`,
+        runs: [],
+        total: 0,
+        took_ms: Date.now() - startTime
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    let allowedSourceIds = configResult.config.sources.map((source) => source.id);
+    if (sourceId) {
+      if (!allowedSourceIds.includes(sourceId)) {
+        return new Response(JSON.stringify({
+          error: `source_id ${sourceId} is not part of project ${projectId}`,
+          runs: [],
+          total: 0,
+          took_ms: Date.now() - startTime
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      allowedSourceIds = [sourceId];
+    }
+
+    if (allowedSourceIds.length === 0) {
+      return new Response(JSON.stringify({
+        project_id: projectId,
+        source_id: sourceId || undefined,
+        limit,
+        runs: [],
+        total: 0,
+        took_ms: Date.now() - startTime
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const commitColumns = await getTableColumns(env, 'commits');
+    const runAtExpression = commitColumns.has('committed_at')
+      ? 'c.committed_at'
+      : commitColumns.has('created_at')
+        ? 'c.created_at'
+        : 'NULL';
+    const itemCountExpression = commitColumns.has('item_count') ? 'c.item_count' : 'NULL';
+    const eventCountExpression = commitColumns.has('event_count') ? 'c.event_count' : 'NULL';
+
+    const placeholders = allowedSourceIds.map(() => '?').join(', ');
+    const query = `
+      SELECT
+        c.commit_id,
+        c.trace_id,
+        c.source_id,
+        ${itemCountExpression} AS item_count,
+        ${eventCountExpression} AS event_count,
+        ${runAtExpression} AS run_at
+      FROM commits c
+      WHERE c.source_id IN (${placeholders})
+      ORDER BY ${runAtExpression === 'NULL' ? 'c.rowid' : 'run_at'} DESC
+      LIMIT ?`;
+
+    const { results } = await env.DB.prepare(query)
+      .bind(...allowedSourceIds, limit)
+      .all<{
+        commit_id: string;
+        trace_id: string;
+        source_id: string;
+        item_count: number | null;
+        event_count: number | null;
+        run_at: string | null;
+      }>();
+
+    const runs = (results || []).map((row) => ({
+      commit_id: row.commit_id,
+      trace_id: row.trace_id,
+      source_id: row.source_id,
+      item_count: typeof row.item_count === 'number' ? row.item_count : null,
+      event_count: typeof row.event_count === 'number' ? row.event_count : null,
+      run_at: row.run_at
+    }));
+
+    return new Response(JSON.stringify({
+      project_id: projectId,
+      source_id: sourceId || undefined,
+      limit,
+      runs,
+      total: runs.length,
+      took_ms: Date.now() - startTime
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (err: any) {
+    return new Response(JSON.stringify({
+      error: `Runs query failed: ${err?.message || String(err)}`,
+      runs: [],
+      total: 0,
+      took_ms: Date.now() - startTime
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
 async function handleHealthRoute(env: Env): Promise<Response> {
   try {
     const lastCommit = await env.DB.prepare('SELECT commit_id FROM commits ORDER BY rowid DESC LIMIT 1').first<{ commit_id: string }>();
@@ -2335,6 +2467,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   
   if (pathname === '/search' && method === 'GET') {
     return handleSearchRoute(env, request);
+  }
+
+  if (pathname === '/runs' && method === 'GET') {
+    return handleRunsRoute(env, request);
   }
   
   if (pathname === '/health' && method === 'GET') {

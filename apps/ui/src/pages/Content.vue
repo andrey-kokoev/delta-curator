@@ -1,16 +1,15 @@
 <template>
   <div class="space-y-6">
     <div>
-      <h1 class="text-3xl font-bold tracking-tight">Content</h1>
-      <p class="text-muted-foreground">Browse curated documents</p>
+      <h1 class="text-3xl font-bold tracking-tight">{{ project?.config.project_name || projectId }}</h1>
+      <p class="text-muted-foreground">{{ project?.config.project_id || projectId }}</p>
     </div>
 
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
 
-    <div v-if="project" class="rounded-lg border bg-card p-4">
-      <p class="text-sm text-muted-foreground">Project</p>
-      <p class="font-medium">{{ project.config.project_name }}</p>
-      <p class="text-xs text-muted-foreground">{{ project.config.project_id }}</p>
+    <div>
+      <h2 class="text-2xl font-semibold tracking-tight">Content</h2>
+      <p class="text-muted-foreground">Browse curated documents</p>
     </div>
 
     <!-- Filters -->
