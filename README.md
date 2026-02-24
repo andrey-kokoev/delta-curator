@@ -1,162 +1,135 @@
 # Delta-Curator
 
-Event-sourced novelty accumulation for continuous intelligence monitoring.
+Event-oriented ingestion and curation for continuous intelligence monitoring.
 
-Delta-Curator ingests external documents in batches, evaluates each item for novelty relative to a curated base, applies explicit policy (append / hold / reject), and persists an append-only audit log as the sole source of truth. The primary runtime is Cloudflare Workers with D1 (state) and R2 (artifacts). Ranking is provided by Cloudflare Workers AI and AI Search.
-
-This repo ships infrastructure, not a UI.
+Delta-Curator runs primarily on Cloudflare Workers, persists state/read models in D1, and stores config/artifacts in R2. It includes an operator UI for project-scoped operations (projects, sources, run, inspect, search, content).
 
 ---
 
-## Guarantees
+## What’s in this repo
 
-- **Append-only log**: all facts are immutable; read models are derived and rebuildable.
-- **Atomic progress**: source cursor advances only within a successful commit.
-- **Semantic identity**: global dedup via `event_id` (semantic-core hash).
-- **Deterministic replay**: given the same inputs and code, event sequences are identical.
-- **Pure stages**: pipeline stages are referentially transparent.
+- `apps/worker`: Cloudflare Worker API
+- `apps/ui`: Vue operator interface
+- `apps/cli`: thin client package
+- `packages/protocol`: shared schemas/types/canonicalization/hashing
+- `packages/runtime`: runtime abstractions and commit helpers
+- `plugins/*`: source/comparator/decider/merger/ranker plugins
 
 ---
 
-## Runtime Model
+## Runtime model
 
 Primary runtime: **Cloudflare Workers**
 
 - Storage:
-  - **D1**: commits, events, read models
-  - **R2**: raw artifacts, comparator snapshots
-- Scheduling:
-  - Worker `scheduled()` trigger (cron)
+  - **D1**: commits, events, source state, read models
+  - **R2**: project config blobs + artifacts
 - AI:
-  - **Workers AI reranker** for ingest-time scoring
-  - **AI Search reranking** for query-time retrieval
-
-Local development runs via `wrangler dev`. The CLI (if present) is a thin HTTP client over the Worker.
+  - **Workers AI reranker** for ingest-time scoring (when enabled)
+- Scheduling:
+  - `scheduled()` entrypoint exists but is currently a **stub** (logs only)
 
 ---
 
-## Worker API
+## API (current)
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/run` | Run one batch for a source |
-| GET | `/inspect?since=PT24H&format=markdown` | On-demand digest |
-| GET | `/search?q=...&k=20&rerank=true` | Query curated base |
-| GET | `/health` | Health + last commit id |
+### Config and auth
+
+- `GET /config`
+- `POST /config`
+- `GET /config/:projectId`
+- `POST /config/:projectId/activate`
+- `DELETE /config/:projectId/:version`
+- `GET /config/active`
+- `POST /seed`
+- `POST /api/auth/admin`
+- `POST /api/auth/admin/token`
+- `GET /api/auth/me`
+- `POST /api/auth/logout`
+- Microsoft OAuth routes
+
+### Operations (strict project-scoped)
+
+The endpoints below require explicit project context:
+
+- `POST /run` with JSON body containing `project_id`
+- `GET /inspect` with query param `project_id`
+- `GET /search` with query param `project_id`
+- `POST /sources/cursor` with JSON body containing `project_id` (admin auth required)
 
 Examples:
 
 ```bash
-curl -X POST https://<worker>/run \
+curl -X POST http://localhost:8787/run \
   -H "Content-Type: application/json" \
-  -d '{"source_id":"fda-warning-letters","max_items":50,"once":true}'
+  -d '{"project_id":"quickstart-demo","source_id":"demo-rss-source","max_items":50,"once":true}'
 
-curl "https://<worker>/inspect?since=PT24H&format=markdown"
+curl "http://localhost:8787/inspect?since=PT24H&format=json&project_id=quickstart-demo"
 
-curl "https://<worker>/search?q=regeneron%20CFR%20820&k=20&rerank=true"
-````
-
----
-
-## Event Model (Canonical)
-
-Events are append-only and globally deduplicated by `event_id`:
-
-* `RawDocObserved`
-* `DocNormalized`
-* `FacetsExtracted`
-* `EntitiesResolved`
-* `CandidateCompared`
-* `DecisionMade`
-* `PatchProposed`
-* `MutationsPlanned`
-* `CommitApplied`
-
-Read models (rebuildable):
-
-* `curated_docs`
-* `facet_index`
-* `fingerprint_index`
-* `hold_index`
-
----
-
-## Configuration
-
-Config is JSON and passed to the Worker. Example (excerpt):
-
-```json
-{
-  "sources": [
-    {
-      "id": "fda-warning-letters",
-      "plugin": "rss_source",
-      "config": {
-        "feed_url": "https://www.fda.gov/safety/medwatch-fda-safety-information-and-adverse-event-reporting-program/medwatch-rss-feed",
-        "max_items_per_batch": 50
-      }
-    }
-  ],
-  "ranking": {
-    "ingest": {
-      "enabled": true,
-      "backend": "workers_ai_rerank",
-      "model": "@cf/baai/bge-reranker-base",
-      "query": "FDA communications relevant to Regeneron regulatory risk"
-    },
-    "search": {
-      "enabled": true,
-      "backend": "ai_search_rerank",
-      "index": "delta-curator-regeneron",
-      "rerank": true
-    }
-  }
-}
-```
-
-Novelty detection is deterministic (explicit deltas). Ranking is advisory.
-
----
-
-## Repo Layout
-
-```
-delta-curator/
-├── packages/
-│   ├── protocol/   # schemas, hashing, ids
-│   ├── runtime/    # runner, interfaces, committer
-│   └── sdk/        # plugin helpers
-├── plugins/        # sources, extractors, comparators, deciders, mergers
-├── apps/
-│   └── worker/     # Cloudflare Worker (wrangler)
-└── examples/quickstart/
+curl "http://localhost:8787/search?q=example&k=20&rerank=false&project_id=quickstart-demo"
 ```
 
 ---
 
-## Deployment
+## Source controls
+
+Per-source pause/resume is supported:
+
+- `sources[].enabled` in project config (`true` by default)
+- Worker `/run` skips paused sources
+- Worker returns clear errors when a paused source is requested
+- UI Sources page includes Enabled/Paused toggle
+
+Cursor management is supported via:
+
+- `POST /sources/cursor` (set/clear cursor)
+- Inspect response includes source cursor details
+- Inspect UI includes per-source set/clear controls
+
+---
+
+## RSS source behavior (current)
+
+`apps/worker/src/sources/rss.ts` currently implements:
+
+- Single feed snapshot fetch per run (no multi-page traversal)
+- Watermark cursor (`cursorPublishedAt`) filtering by item `pubDate`
+- GUID/link/title fallback ID
+- Dedupe via bounded recent GUID memory (`recentGuids`)
+- Per-run output cap via `max_items` from `/run` (worker clamps values)
+
+---
+
+## Development
+
+Install:
 
 ```bash
 pnpm install
-wrangler login
-wrangler d1 create delta-curator
-pnpm deploy
 ```
 
-Verify:
+Run worker locally:
 
 ```bash
-curl https://<worker>/health
+pnpm run dev:worker
+```
+
+Run UI locally:
+
+```bash
+pnpm --filter @delta-curator/ui dev
+```
+
+Build worker:
+
+```bash
+pnpm --filter @delta-curator/worker build
 ```
 
 ---
 
-## Non-Goals (v0/v1)
+## Notes
 
-* No web UI
-* No dashboards
-* No topic orchestrator
-* No claim-level knowledge graph
-* No Railway dependency
-
-This repo ships a working novelty accumulation substrate. Policy, scope, and ranking are configured, not hardcoded.
+- Active project still exists as a config convenience (`/config/active`), but operation endpoints are explicitly project-scoped.
+- Worker includes schema-adaptive persistence paths for compatibility with legacy/new D1 table shapes.
+- If route contracts or source state semantics change, update both `README.md` and `AGENTS.md`.
