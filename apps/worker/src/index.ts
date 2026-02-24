@@ -302,6 +302,23 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
 
 async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   try {
+    // Check required environment variables
+    if (!env.ADMIN_TOKEN) {
+      console.error('ADMIN_TOKEN environment variable is not set');
+      return new Response(JSON.stringify({ error: 'Server configuration error: ADMIN_TOKEN not configured' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (!env.AUTH_SECRET) {
+      console.error('AUTH_SECRET environment variable is not set');
+      return new Response(JSON.stringify({ error: 'Server configuration error: AUTH_SECRET not configured' }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
     const body = await request.json() as { token?: string };
     const providedToken = body.token;
     
@@ -313,6 +330,7 @@ async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
     }
     
     if (providedToken !== env.ADMIN_TOKEN) {
+      console.warn(`Invalid admin token provided: ${providedToken.slice(0, 10)}...`);
       return new Response(JSON.stringify({ error: 'Invalid token' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' }

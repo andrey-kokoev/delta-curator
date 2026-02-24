@@ -32,23 +32,24 @@
         </div>
 
         <!-- Admin Token Login -->
-        <div class="space-y-3">
-          <label class="text-sm font-medium">Admin Token</label>
-          <input
-            v-model="adminToken"
-            type="password"
-            placeholder="Enter admin token"
-            class="w-full rounded-lg border bg-background px-3 py-2"
-            @keyup.enter="handleAdminLogin"
-          />
-          <button
-            @click="handleAdminLogin"
-            class="w-full rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
-            :disabled="authStore.isLoading || !adminToken"
-          >
-            {{ authStore.isLoading ? 'Logging in...' : 'Login as Admin' }}
-          </button>
-        </div>
+        <form @submit.prevent="handleAdminLogin">
+          <div class="space-y-3">
+            <label class="text-sm font-medium">Admin Token</label>
+            <input
+              v-model="adminToken"
+              type="password"
+              placeholder="Enter admin token"
+              class="w-full rounded-lg border bg-background px-3 py-2"
+            />
+            <button
+              type="submit"
+              class="w-full rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+              :disabled="authStore.isLoading || !adminToken"
+            >
+              {{ authStore.isLoading ? 'Logging in...' : 'Login as Admin' }}
+            </button>
+          </div>
+        </form>
       </div>
       
       <p v-if="authStore.error" class="text-center text-sm text-destructive">

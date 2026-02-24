@@ -9,6 +9,14 @@ export default defineConfig({
       '@': resolve(__dirname, './src')
     }
   },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      }
+    }
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

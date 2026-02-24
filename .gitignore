@@ -45,3 +45,6 @@ artifacts/
 *.temp
 .turbo/
 .opencode
+apps/worker/.dev.vars
+
+.wrangler
