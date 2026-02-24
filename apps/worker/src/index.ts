@@ -1172,6 +1172,8 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
     }
 
     if (body.clear_recent_guids ?? true) {
+      newState.cursorIds = [];
+      newState.recentIds = [];
       newState.recentGuids = [];
       newState.processedGuids = [];
     }
@@ -1384,7 +1386,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     // Read batch from source
     const batchResult = await source.readBatch(sourceState, maxItems);
     
-    if (!batchResult || batchResult.items.length === 0) {
+    if (!batchResult) {
       return new Response(JSON.stringify({ 
         commit_id: null,
         trace_id: traceId,
@@ -1814,11 +1816,13 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
         parsedState = {};
       }
 
-      const recentGuids = Array.isArray(parsedState.recentGuids)
-        ? parsedState.recentGuids
-        : Array.isArray(parsedState.processedGuids)
-          ? parsedState.processedGuids
-          : [];
+      const recentGuids = Array.isArray(parsedState.recentIds)
+        ? parsedState.recentIds
+        : Array.isArray(parsedState.recentGuids)
+          ? parsedState.recentGuids
+          : Array.isArray(parsedState.processedGuids)
+            ? parsedState.processedGuids
+            : [];
 
       return {
         source_id: source.id,
