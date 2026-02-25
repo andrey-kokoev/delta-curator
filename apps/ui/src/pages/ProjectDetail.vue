@@ -13,11 +13,11 @@
     <div class="space-y-3 w-full">
       <div class="flex items-start justify-between w-full gap-3">
         <div class="grow min-w-0">
-        <div class="flex items-center gap-3 grow">
+        <div class="flex w-full items-center gap-3">
           <input
             v-model="editableProjectName"
             type="text"
-            class="text-3xl font-bold tracking-tight bg-transparent border-0 border-b border-transparent px-0 focus:border-border focus:outline-none"
+            class="w-full text-3xl font-bold tracking-tight bg-transparent border-0 border-b border-transparent px-0 focus:border-border focus:outline-none"
             @blur="saveInlineEdits"
             @keydown.enter.prevent="saveInlineEdits"
           />
@@ -35,9 +35,9 @@
         </div>
       </div>
       <div class="border rounded-md bg-muted p-4 w-full">
-        <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monitoring Focus (used for AI unless explicit ranking query)</p>
+        <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Novelty Criteria</p>
         <input
-          v-model="editableTopicLabel"
+          v-model="editableNoveltyCriteria"
           type="text"
           class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-base font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
           @blur="saveInlineEdits"
@@ -149,7 +149,7 @@ const loading = ref(true)
 const deleting = ref(false)
 const sourceCursors = ref<Record<string, InspectSourceCursor>>({})
 const editableProjectName = ref('')
-const editableTopicLabel = ref('')
+const editableNoveltyCriteria = ref('')
 const inlineSaving = ref(false)
 const inlineSaveError = ref<string | null>(null)
 const rawCopied = ref(false)
@@ -182,7 +182,10 @@ async function loadProject() {
     loading.value = true
     project.value = await apiStore.getConfig(projectId)
     editableProjectName.value = project.value.config.project_name
-    editableTopicLabel.value = project.value.config.topic.label
+    const rules = (project.value.config.pipeline?.decider?.config as { rules?: unknown })?.rules
+    editableNoveltyCriteria.value = Array.isArray(rules)
+      ? rules.map((rule) => String(rule)).join(', ')
+      : ''
     await loadSourceCursors()
   } catch (err) {
     console.error('Failed to load project:', err)
@@ -195,18 +198,26 @@ async function saveInlineEdits() {
   if (!project.value) return
 
   const trimmedName = editableProjectName.value.trim()
-  const trimmedTopic = editableTopicLabel.value.trim()
+  const trimmedCriteria = editableNoveltyCriteria.value.trim()
 
-  if (!trimmedName || !trimmedTopic) {
-    inlineSaveError.value = 'Project name and topic cannot be empty.'
+  if (!trimmedName || !trimmedCriteria) {
+    inlineSaveError.value = 'Project name and novelty criteria cannot be empty.'
     editableProjectName.value = project.value.config.project_name
-    editableTopicLabel.value = project.value.config.topic.label
+    const rules = (project.value.config.pipeline?.decider?.config as { rules?: unknown })?.rules
+    editableNoveltyCriteria.value = Array.isArray(rules)
+      ? rules.map((rule) => String(rule)).join(', ')
+      : ''
     return
   }
 
+  const currentRules = (project.value.config.pipeline?.decider?.config as { rules?: unknown })?.rules
+  const currentCriteria = Array.isArray(currentRules)
+    ? currentRules.map((rule) => String(rule)).join(', ')
+    : ''
+
   if (
     trimmedName === project.value.config.project_name &&
-    trimmedTopic === project.value.config.topic.label
+    trimmedCriteria === currentCriteria
   ) {
     inlineSaveError.value = null
     return
@@ -216,15 +227,26 @@ async function saveInlineEdits() {
   inlineSaveError.value = null
 
   const previousName = project.value.config.project_name
-  const previousTopic = project.value.config.topic.label
+  const previousCriteria = currentCriteria
 
   try {
+    const rules = trimmedCriteria
+      .split(',')
+      .map((rule) => rule.trim())
+      .filter(Boolean)
+
     const updatedConfig: ProjectConfig = {
       ...project.value.config,
       project_name: trimmedName,
-      topic: {
-        ...project.value.config.topic,
-        label: trimmedTopic
+      pipeline: {
+        ...project.value.config.pipeline,
+        decider: {
+          ...project.value.config.pipeline.decider,
+          config: {
+            ...(project.value.config.pipeline.decider.config as Record<string, unknown>),
+            rules
+          }
+        }
       }
     }
 
@@ -232,7 +254,7 @@ async function saveInlineEdits() {
     project.value.config = updatedConfig
   } catch (err) {
     editableProjectName.value = previousName
-    editableTopicLabel.value = previousTopic
+    editableNoveltyCriteria.value = previousCriteria
     inlineSaveError.value = 'Failed to save changes.'
     console.error('Failed to save inline edits:', err)
   } finally {

@@ -50,8 +50,18 @@
               <Label :for="currentStepData.field" class="pb-2">{{ currentStepData.fieldLabel }}</Label>
 
               <!-- Text Input -->
+              <input
+                v-if="currentStepData.type === 'text'"
+                :id="currentStepData.field"
+                v-model="formData[currentStepData.field]"
+                type="text"
+                :placeholder="currentStepData.placeholder"
+                class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                @input="validateCurrentField"
+              />
+
               <Textarea
-                v-if="currentStepData.type === 'textarea'"
+                v-else-if="currentStepData.type === 'textarea'"
                 :id="currentStepData.field"
                 v-model="formData[currentStepData.field]"
                 :placeholder="currentStepData.placeholder"
@@ -170,13 +180,14 @@ interface Step {
   description: string
   field: string
   fieldLabel: string
-  type: 'textarea' | 'select'
+  type: 'text' | 'textarea' | 'select'
   placeholder: string
   aiQuestion: string
   help?: string
   options?: { value: string; label: string }[]
   validation?: (value: string) => string | null
   required?: boolean
+  showIf?: (data: Record<string, string>) => boolean
 }
 
 const props = defineProps<{
@@ -196,18 +207,18 @@ const creating = ref(false)
 
 const steps: Step[] = [
   {
-    id: 'description',
+    id: 'project_name',
     title: 'Project Overview',
-    description: 'Tell me about your curation goals',
-    field: 'description',
-    fieldLabel: 'Project Description',
-    type: 'textarea',
-    placeholder: 'What do you want to curate? (e.g., AI news, tech blogs, research papers)',
-    aiQuestion: 'What kind of content would you like to curate? Please describe your project in a few sentences.',
-    help: 'Be specific about the domain, sources, and what makes content "interesting" to you. This helps me suggest the best configuration.',
+    description: 'Set a clear name for this curation project',
+    field: 'project_name',
+    fieldLabel: 'Project Name',
+    type: 'text',
+    placeholder: 'e.g., MCP News Tracker',
+    aiQuestion: 'What should this project be called?',
+    help: 'Use a short, clear name you can quickly recognize later.',
     validation: (value) => {
-      if (!value.trim()) return 'Please provide a project description'
-      if (value.length < 10) return 'Please provide more detail (at least 10 characters)'
+      if (!value.trim()) return 'Please provide a project name'
+      if (value.trim().length < 3) return 'Project name must be at least 3 characters'
       return null
     },
     required: true,
@@ -256,6 +267,32 @@ const steps: Step[] = [
     required: true,
   },
   {
+    id: 'rss_feed_url',
+    title: 'RSS Feed URL',
+    description: 'Which RSS feed should we ingest?',
+    field: 'rss_feed_url',
+    fieldLabel: 'RSS Feed URL',
+    type: 'textarea',
+    placeholder: 'https://example.com/feed.xml',
+    aiQuestion: 'Please provide the RSS feed URL to ingest for this project.',
+    help: 'Use the full feed URL. Example: https://news.ycombinator.com/rss',
+    showIf: (data) => data.sources === 'rss',
+    validation: (value) => {
+      const trimmed = value.trim()
+      if (!trimmed) return 'Please provide an RSS feed URL'
+      try {
+        const url = new URL(trimmed)
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+          return 'RSS feed URL must start with http:// or https://'
+        }
+      } catch {
+        return 'Please enter a valid URL'
+      }
+      return null
+    },
+    required: true,
+  },
+  {
     id: 'criteria',
     title: 'Novelty Criteria',
     description: 'What makes content novel or interesting?',
@@ -297,9 +334,18 @@ const steps: Step[] = [
 
 const currentStepData = computed(() => steps[currentStep.value])
 
+function isStepVisible(step: Step): boolean {
+  return step.showIf ? step.showIf(formData.value) : true
+}
+
+function getVisibleSteps() {
+  return steps.filter(isStepVisible)
+}
+
 const isCurrentFieldValid = computed(() => {
   const step = currentStepData.value
   if (!step) return false
+  if (!isStepVisible(step)) return true
 
   const value = formData.value[step.field] || ''
   const validationError = step.validation ? step.validation(value) : null
@@ -308,7 +354,7 @@ const isCurrentFieldValid = computed(() => {
 })
 
 const isFormValid = computed(() => {
-  return steps.every(step => {
+  return getVisibleSteps().every(step => {
     const value = formData.value[step.field] || ''
     const validationError = step.validation ? step.validation(value) : null
     return !validationError
@@ -318,6 +364,10 @@ const isFormValid = computed(() => {
 const validateCurrentField = () => {
   const step = currentStepData.value
   if (!step) return
+  if (!isStepVisible(step)) {
+    delete fieldErrors.value[step.field]
+    return
+  }
 
   const value = formData.value[step.field] || ''
   const validationError = step.validation ? step.validation(value) : null
@@ -330,14 +380,26 @@ const validateCurrentField = () => {
 }
 
 const nextStep = () => {
-  if (currentStep.value < steps.length - 1 && isCurrentFieldValid.value) {
-    currentStep.value++
+  if (!isCurrentFieldValid.value) return
+
+  let next = currentStep.value + 1
+  while (next < steps.length && !isStepVisible(steps[next])) {
+    next++
+  }
+
+  if (next < steps.length) {
+    currentStep.value = next
   }
 }
 
 const previousStep = () => {
-  if (currentStep.value > 0) {
-    currentStep.value--
+  let prev = currentStep.value - 1
+  while (prev >= 0 && !isStepVisible(steps[prev])) {
+    prev--
+  }
+
+  if (prev >= 0) {
+    currentStep.value = prev
   }
 }
 
@@ -347,10 +409,10 @@ const generateConfig = (): ProjectConfig => {
   // Map form data to actual config structure
   const config: ProjectConfig = {
     project_id: `project-${Date.now()}`,
-    project_name: data.description?.slice(0, 50) + "..." || "AI Curation Project",
+    project_name: data.project_name?.trim() || 'AI Curation Project',
     topic: {
       id: 'ai-generated-topic',
-      label: data.description || 'Generated topic'
+      label: data.project_name || 'Generated topic'
     },
     sources: [],
     pipeline: {
@@ -373,12 +435,17 @@ const generateConfig = (): ProjectConfig => {
 
   // Configure source based on selection
   if (data.sources === 'rss') {
+    const rssFeedUrl = data.rss_feed_url?.trim()
+    if (!rssFeedUrl) {
+      throw new Error('RSS source requires a feed URL')
+    }
+
     config.sources.push({
       id: "rss-source",
       plugin: "rss_source",
       enabled: true,
       config: {
-        feed_url: "https://example.com/feed.xml",
+        feed_url: rssFeedUrl,
         user_agent: 'delta-curator/0.1',
         max_items_per_batch: data.frequency === 'hourly' ? 10 : data.frequency === 'daily' ? 50 : 100
       },
@@ -456,10 +523,34 @@ const createProject = async () => {
 // Reset form when dialog opens
 watch(() => props.open, (isOpen) => {
   if (isOpen) {
-    currentStep.value = 0
+    const firstVisibleStepIndex = steps.findIndex(step => isStepVisible(step))
+    currentStep.value = firstVisibleStepIndex >= 0 ? firstVisibleStepIndex : 0
     formData.value = {}
     fieldErrors.value = {}
     error.value = ''
+  }
+})
+
+watch(() => formData.value.sources, () => {
+  if (currentStep.value >= steps.length) {
+    currentStep.value = steps.length - 1
+  }
+
+  const current = steps[currentStep.value]
+  if (current && !isStepVisible(current)) {
+    const nextVisible = steps.findIndex((step, idx) => idx >= currentStep.value && isStepVisible(step))
+    if (nextVisible >= 0) {
+      currentStep.value = nextVisible
+      return
+    }
+
+    const prevVisible = [...steps]
+      .map((step, idx) => ({ step, idx }))
+      .reverse()
+      .find(({ idx, step }) => idx < currentStep.value && isStepVisible(step))
+    if (prevVisible) {
+      currentStep.value = prevVisible.idx
+    }
   }
 })
 </script>

@@ -542,6 +542,138 @@ async function getTableColumns(env: Env, table: 'commits' | 'source_state' | 'cu
   return new Set((results ?? []).map((row) => row.name));
 }
 
+async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
+  const commitColumns = await getTableColumns(env, 'commits');
+
+  if (!commitColumns.has('project_id')) {
+    try {
+      await env.DB.prepare('ALTER TABLE commits ADD COLUMN project_id TEXT').run();
+    } catch (err) {
+      const message = String(err);
+      if (!message.includes('duplicate column name')) {
+        throw err;
+      }
+    }
+  }
+
+  await env.DB.prepare(
+    'CREATE INDEX IF NOT EXISTS idx_commits_project_source ON commits(project_id, source_id)'
+  ).run();
+
+  if (commitColumns.has('committed_at')) {
+    await env.DB.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_commits_project_source_committed_time ON commits(project_id, source_id, committed_at)'
+    ).run();
+  } else if (commitColumns.has('created_at')) {
+    await env.DB.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_commits_project_source_created_time ON commits(project_id, source_id, created_at)'
+    ).run();
+  }
+
+  const legacyCommitExists = await env.DB.prepare(
+    `SELECT commit_id
+     FROM commits
+     WHERE project_id IS NULL OR TRIM(project_id) = ''
+     LIMIT 1`
+  ).first<{ commit_id: string }>();
+
+  if (!legacyCommitExists?.commit_id) {
+    return;
+  }
+
+  const sourceStateColumns = await getTableColumns(env, 'source_state');
+  const curatedDocColumns = await getTableColumns(env, 'curated_docs');
+  const legacyCommitPredicate = "project_id IS NULL OR TRIM(project_id) = ''";
+
+  if (sourceStateColumns.has('last_commit_id')) {
+    await env.DB.prepare(
+      `DELETE FROM source_state
+       WHERE last_commit_id IN (
+         SELECT commit_id
+         FROM commits
+         WHERE ${legacyCommitPredicate}
+       )`
+    ).run();
+  }
+
+  if (curatedDocColumns.has('event_id')) {
+    await env.DB.prepare(
+      `DELETE FROM curated_docs
+       WHERE event_id IN (
+         SELECT e.event_id
+         FROM events e
+         JOIN commits c ON c.commit_id = e.commit_id
+         WHERE c.${legacyCommitPredicate}
+       )`
+    ).run();
+  }
+
+  if (curatedDocColumns.has('last_event_id')) {
+    await env.DB.prepare(
+      `DELETE FROM curated_docs
+       WHERE last_event_id IN (
+         SELECT e.event_id
+         FROM events e
+         JOIN commits c ON c.commit_id = e.commit_id
+         WHERE c.${legacyCommitPredicate}
+       )`
+    ).run();
+  }
+
+  await env.DB.prepare(
+    `DELETE FROM facet_index
+     WHERE event_id IN (
+       SELECT e.event_id
+       FROM events e
+       JOIN commits c ON c.commit_id = e.commit_id
+       WHERE c.${legacyCommitPredicate}
+     )`
+  ).run();
+
+  await env.DB.prepare(
+    `DELETE FROM fingerprint_index
+     WHERE first_event_id IN (
+       SELECT e.event_id
+       FROM events e
+       JOIN commits c ON c.commit_id = e.commit_id
+       WHERE c.${legacyCommitPredicate}
+     )`
+  ).run();
+
+  await env.DB.prepare(
+    `DELETE FROM hold_index
+     WHERE event_id IN (
+       SELECT e.event_id
+       FROM events e
+       JOIN commits c ON c.commit_id = e.commit_id
+       WHERE c.${legacyCommitPredicate}
+     )`
+  ).run();
+
+  await env.DB.prepare(
+    `DELETE FROM artifacts
+     WHERE commit_id IN (
+       SELECT commit_id
+       FROM commits
+       WHERE ${legacyCommitPredicate}
+     )`
+  ).run();
+
+  await env.DB.prepare(
+    `DELETE FROM events
+     WHERE commit_id IN (
+       SELECT commit_id
+       FROM commits
+       WHERE ${legacyCommitPredicate}
+     )`
+  ).run();
+
+  await env.DB.prepare(
+    `DELETE FROM commits
+     WHERE ${legacyCommitPredicate}`
+  ).run();
+}
+
 function makeScopedSourceStateId(projectId: string, sourceId: string): string {
   return `${projectId}::${sourceId}`;
 }
@@ -632,6 +764,7 @@ async function upsertSourceState(
 async function ensureCursorCommit(
   env: Env,
   commitColumns: Set<string>,
+  projectId: string,
   sourceId: string,
   traceId: string,
   oldState: unknown,
@@ -642,7 +775,7 @@ async function ensureCursorCommit(
   const oldStateJson = JSON.stringify(oldState ?? {});
   const newStateJson = JSON.stringify(newState ?? {});
   const commitKey = await sha256Base64(
-    `${sourceId}:${oldStateJson}:${itemIds.sort().join('|')}`
+    `${projectId}:${sourceId}:${oldStateJson}:${itemIds.sort().join('|')}`
   );
 
   if (
@@ -659,38 +792,72 @@ async function ensureCursorCommit(
     }
 
     const commitId = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO commits
-       (commit_id, commit_key, trace_id, source_id, old_state, new_state, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      commitId,
-      commitKey,
-      traceId,
-      sourceId,
-      oldStateJson,
-      newStateJson,
-      now
-    ).run();
+    if (commitColumns.has('project_id')) {
+      await env.DB.prepare(
+        `INSERT INTO commits
+         (commit_id, commit_key, trace_id, source_id, project_id, old_state, new_state, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        commitId,
+        commitKey,
+        traceId,
+        sourceId,
+        projectId,
+        oldStateJson,
+        newStateJson,
+        now
+      ).run();
+    } else {
+      await env.DB.prepare(
+        `INSERT INTO commits
+         (commit_id, commit_key, trace_id, source_id, old_state, new_state, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        commitId,
+        commitKey,
+        traceId,
+        sourceId,
+        oldStateJson,
+        newStateJson,
+        now
+      ).run();
+    }
 
     return { commitId, commitKey };
   }
 
   const commitId = crypto.randomUUID();
   if (commitColumns.has('source_state')) {
-    await env.DB.prepare(
-      `INSERT INTO commits
-       (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      commitId,
-      traceId,
-      sourceId,
-      newStateJson,
-      itemIds.length,
-      0,
-      now
-    ).run();
+    if (commitColumns.has('project_id')) {
+      await env.DB.prepare(
+        `INSERT INTO commits
+         (commit_id, trace_id, source_id, project_id, source_state, item_count, event_count, committed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        commitId,
+        traceId,
+        sourceId,
+        projectId,
+        newStateJson,
+        itemIds.length,
+        0,
+        now
+      ).run();
+    } else {
+      await env.DB.prepare(
+        `INSERT INTO commits
+         (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        commitId,
+        traceId,
+        sourceId,
+        newStateJson,
+        itemIds.length,
+        0,
+        now
+      ).run();
+    }
 
     return { commitId, commitKey };
   }
@@ -1171,6 +1338,7 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
     }
 
     const now = new Date().toISOString();
+    await ensureCommitsProjectScopeSchema(env);
     const scopedSourceStateId = makeScopedSourceStateId(configResult.config.project_id, sourceId);
     const oldState = await readSourceStateWithFallback(env, configResult.config.project_id, sourceId);
 
@@ -1198,6 +1366,7 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
     const cursorCommit = await ensureCursorCommit(
       env,
       commitColumns,
+      configResult.config.project_id,
       sourceId,
       traceId,
       oldState,
@@ -1501,6 +1670,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   let cursorAfter: string | null = null;
   
   try {
+    await ensureCommitsProjectScopeSchema(env);
     const commitColumns = await getTableColumns(env, 'commits');
     const sourceStateColumns = await getTableColumns(env, 'source_state');
     const curatedDocColumns = await getTableColumns(env, 'curated_docs');
@@ -1801,6 +1971,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         const cursorCommit = await ensureCursorCommit(
           env,
           commitColumns,
+          config.project_id,
           sourceConfig.id,
           traceId,
           sourceState,
@@ -1844,42 +2015,75 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     const oldStateJson = JSON.stringify(sourceState);
     const newStateJson = JSON.stringify(batchResult.newState);
     const commitKey = await sha256Base64(
-      `${sourceConfig.id}:${oldStateJson}:${events.map((e) => e.source_item_id).join('|')}`
+      `${config.project_id}:${sourceConfig.id}:${oldStateJson}:${events.map((e) => e.source_item_id).join('|')}`
     );
-
     // Create commit record first (events has FK -> commits)
     if (commitColumns.has('source_state')) {
-      await env.DB.prepare(
-        `INSERT INTO commits 
-         (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        commitId,
-        traceId,
-        sourceConfig.id,
-        newStateJson,
-        items.length,
-        events.length,
-        now
-      ).run();
+      if (commitColumns.has('project_id')) {
+        await env.DB.prepare(
+          `INSERT INTO commits 
+           (commit_id, trace_id, source_id, project_id, source_state, item_count, event_count, committed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          commitId,
+          traceId,
+          sourceConfig.id,
+          config.project_id,
+          newStateJson,
+          items.length,
+          events.length,
+          now
+        ).run();
+      } else {
+        await env.DB.prepare(
+          `INSERT INTO commits 
+           (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          commitId,
+          traceId,
+          sourceConfig.id,
+          newStateJson,
+          items.length,
+          events.length,
+          now
+        ).run();
+      }
     } else if (
       commitColumns.has('commit_key') &&
       commitColumns.has('old_state') &&
       commitColumns.has('new_state')
     ) {
-      await env.DB.prepare(
-        `INSERT INTO commits
-         (commit_id, commit_key, trace_id, source_id, old_state, new_state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        commitId,
-        commitKey,
-        traceId,
-        sourceConfig.id,
-        oldStateJson,
-        newStateJson,
-        now
-      ).run();
+      if (commitColumns.has('project_id')) {
+        await env.DB.prepare(
+          `INSERT INTO commits
+           (commit_id, commit_key, trace_id, source_id, project_id, old_state, new_state, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          commitId,
+          commitKey,
+          traceId,
+          sourceConfig.id,
+          config.project_id,
+          oldStateJson,
+          newStateJson,
+          now
+        ).run();
+      } else {
+        await env.DB.prepare(
+          `INSERT INTO commits
+           (commit_id, commit_key, trace_id, source_id, old_state, new_state, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          commitId,
+          commitKey,
+          traceId,
+          sourceConfig.id,
+          oldStateJson,
+          newStateJson,
+          now
+        ).run();
+      }
     } else {
       throw new Error('Unsupported commits table schema');
     }
@@ -2547,6 +2751,7 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
   }
 
   try {
+    await ensureCommitsProjectScopeSchema(env);
     const configResult = await readConfig(env, projectId);
     if (configResult.error || !configResult.config) {
       return new Response(JSON.stringify({
@@ -2597,6 +2802,9 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
         : 'NULL';
     const itemCountExpression = commitColumns.has('item_count') ? 'c.item_count' : 'NULL';
     const eventCountExpression = commitColumns.has('event_count') ? 'c.event_count' : 'NULL';
+    const projectFilterClause = commitColumns.has('project_id')
+      ? 'AND c.project_id = ?'
+      : '';
 
     const placeholders = allowedSourceIds.map(() => '?').join(', ');
     const query = `
@@ -2609,11 +2817,12 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
         ${runAtExpression} AS run_at
       FROM commits c
       WHERE c.source_id IN (${placeholders})
+        ${projectFilterClause}
       ORDER BY ${runAtExpression === 'NULL' ? 'c.rowid' : 'run_at'} DESC
       LIMIT ?`;
 
     const { results } = await env.DB.prepare(query)
-      .bind(...allowedSourceIds, limit)
+      .bind(...allowedSourceIds, ...(commitColumns.has('project_id') ? [projectId] : []), limit)
       .all<{
         commit_id: string;
         trace_id: string;
@@ -2685,6 +2894,7 @@ CREATE TABLE IF NOT EXISTS commits (
   commit_id TEXT PRIMARY KEY,
   trace_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
+  project_id TEXT,
   source_state TEXT NOT NULL,
   item_count INTEGER NOT NULL DEFAULT 0,
   event_count INTEGER NOT NULL DEFAULT 0,
@@ -2692,6 +2902,7 @@ CREATE TABLE IF NOT EXISTS commits (
 );
 CREATE INDEX IF NOT EXISTS idx_commits_source_trace ON commits(source_id, trace_id);
 CREATE INDEX IF NOT EXISTS idx_commits_time ON commits(committed_at);
+CREATE INDEX IF NOT EXISTS idx_commits_project_source_time ON commits(project_id, source_id, committed_at);
 
 CREATE TABLE IF NOT EXISTS events (
   event_id TEXT PRIMARY KEY,
@@ -2804,6 +3015,8 @@ async function handleInit(env: Env): Promise<Response> {
         }
       }
     }
+
+    await ensureCommitsProjectScopeSchema(env);
     
     return new Response(JSON.stringify({ success: true, message: 'Database initialized' }), {
       headers: { 'Content-Type': 'application/json' }
