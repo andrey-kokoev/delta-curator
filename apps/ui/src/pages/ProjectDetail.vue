@@ -10,8 +10,9 @@
 
   <div v-else class="space-y-6 w-full border rounded-lg bg-card p-6">
     <!-- Header -->
-    <div class="flex items-start justify-between w-full">
-      <div class="grow"">
+    <div class="space-y-3 w-full">
+      <div class="flex items-start justify-between w-full gap-3">
+        <div class="grow min-w-0">
         <div class="flex items-center gap-3 grow">
           <input
             v-model="editableProjectName"
@@ -22,25 +23,26 @@
           />
         </div>
         <p class="text-muted-foreground">{{ project.config.project_id }}</p>
-        <div class="mt-3 border rounded-md bg-muted p-4 w-full">
-          <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monitoring Focus (used for AI unless explicit ranking query)</p>
-          <input
-            v-model="editableTopicLabel"
-            type="text"
-            class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-base font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            @blur="saveInlineEdits"
-            @keydown.enter.prevent="saveInlineEdits"
-          />
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            @click="deleteProject"
+            class="rounded-lg border border-destructive px-4 py-2 text-destructive hover:bg-destructive/10"
+            :disabled="deleting"
+          >
+            {{ deleting ? 'Deleting...' : 'Delete' }}
+          </button>
         </div>
       </div>
-      <div class="flex items-center gap-2">
-        <button
-          @click="deleteProject"
-          class="rounded-lg border border-destructive px-4 py-2 text-destructive hover:bg-destructive/10"
-          :disabled="deleting"
-        >
-          {{ deleting ? 'Deleting...' : 'Delete' }}
-        </button>
+      <div class="border rounded-md bg-muted p-4 w-full">
+        <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monitoring Focus (used for AI unless explicit ranking query)</p>
+        <input
+          v-model="editableTopicLabel"
+          type="text"
+          class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-base font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          @blur="saveInlineEdits"
+          @keydown.enter.prevent="saveInlineEdits"
+        />
       </div>
     </div>
 
