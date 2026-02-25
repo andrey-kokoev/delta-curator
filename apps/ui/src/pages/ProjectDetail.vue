@@ -8,11 +8,11 @@
     <RouterLink to="/projects" class="text-primary hover:underline">Back to projects</RouterLink>
   </div>
 
-  <div v-else class="space-y-6">
+  <div v-else class="space-y-6 w-full border rounded-lg bg-card p-6">
     <!-- Header -->
-    <div class="flex items-start justify-between">
-      <div>
-        <div class="flex items-center gap-3">
+    <div class="flex items-start justify-between w-full">
+      <div class="grow"">
+        <div class="flex items-center gap-3 grow">
           <input
             v-model="editableProjectName"
             type="text"
@@ -22,7 +22,7 @@
           />
         </div>
         <p class="text-muted-foreground">{{ project.config.project_id }}</p>
-        <div class="mt-3">
+        <div class="mt-3 border rounded-md bg-muted p-4 w-full">
           <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monitoring Focus (used for AI unless explicit ranking query)</p>
           <input
             v-model="editableTopicLabel"

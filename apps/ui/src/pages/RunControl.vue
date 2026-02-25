@@ -63,23 +63,23 @@
         <p class="text-xs text-muted-foreground">
           For RSS sources, next run only considers items where <span class="font-mono">pubDate</span> is after this value.
         </p>
-        <input
-          v-model="cursorPublishedAt"
-          type="datetime-local"
-          class="w-full rounded-lg border bg-background px-3 py-2"
-          :disabled="!sourceId || updatingCursor"
-        />
-        <div class="flex gap-2">
+        <div class="flex items-center gap-2">
+          <input
+            v-model="cursorPublishedAt"
+            type="datetime-local"
+            class="min-w-0 flex-1 rounded-lg border bg-background px-3 py-2"
+            :disabled="!sourceId || updatingCursor"
+          />
           <button
             @click="setCursor"
-            class="flex-1 rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+            class="whitespace-nowrap rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
             :disabled="!sourceId || !cursorPublishedAt || updatingCursor"
           >
             {{ updatingCursor ? 'Saving...' : 'Use This Date' }}
           </button>
           <button
             @click="clearCursor"
-            class="flex-1 rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
+            class="whitespace-nowrap rounded-lg border px-4 py-2 hover:bg-accent transition-colors"
             :disabled="!sourceId || updatingCursor"
           >
             Remove Date Filter
@@ -115,11 +115,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useApiStore } from '@/stores/api'
 import ProjectSubnav from '@/components/ProjectSubnav.vue'
-import type { ProjectConfig } from '@/types'
+import type { ProjectConfig, InspectResult } from '@/types'
 
 const apiStore = useApiStore()
 const route = useRoute()
@@ -131,21 +131,57 @@ const sourceId = ref('')
 const maxItems = ref(50)
 const running = ref(false)
 const updatingCursor = ref(false)
-const cursorPublishedAt = ref(defaultDateFilterValue())
+const cursorPublishedAt = ref('')
+const sourceCursorById = ref<Record<string, string>>({})
 const result = ref<{ commit_id: string | null; items_processed: number; events_written: number; trace_id?: string } | null>(null)
-
-function defaultDateFilterValue(): string {
-  const now = new Date()
-  const startOfDayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
-  const local = new Date(startOfDayLocal.getTime() - startOfDayLocal.getTimezoneOffset() * 60000)
-  return local.toISOString().slice(0, 16)
-}
 
 function formatUtcMinute(value: string | null | undefined): string {
   if (!value) return 'not set'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return `${date.toISOString().slice(0, 16)}Z`
+}
+
+function isoToDatetimeLocal(value: string | null | undefined): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
+
+function getEffectiveProjectId(): string | null {
+  if (projectId) return projectId
+  return activeProject.value?.config.project_id || null
+}
+
+function syncCursorInputForSource() {
+  if (!sourceId.value) {
+    cursorPublishedAt.value = ''
+    return
+  }
+
+  const saved = sourceCursorById.value[sourceId.value]
+  cursorPublishedAt.value = typeof saved === 'string' ? saved : ''
+}
+
+async function loadSourceCursors() {
+  const effectiveProjectId = getEffectiveProjectId()
+  if (!effectiveProjectId) return
+
+  try {
+    const result = await apiStore.inspect('PT24H', 'json', effectiveProjectId) as InspectResult
+    const byId: Record<string, string> = {}
+
+    for (const source of result.sources || []) {
+      byId[source.source_id] = isoToDatetimeLocal(source.cursor_published_at)
+    }
+
+    sourceCursorById.value = byId
+    syncCursorInputForSource()
+  } catch (err) {
+    console.error('Failed to load source cursors:', err)
+  }
 }
 
 async function loadActiveProject() {
@@ -159,6 +195,8 @@ async function loadActiveProject() {
     if (activeProject.value?.config.sources.length) {
       sourceId.value = activeProject.value.config.sources[0].id
     }
+
+    await loadSourceCursors()
   } catch (err) {
     console.error('No active project:', err)
   }
@@ -166,10 +204,12 @@ async function loadActiveProject() {
 
 async function runBatch() {
   if (!sourceId.value) return
+  const effectiveProjectId = getEffectiveProjectId()
+  if (!effectiveProjectId) return
   
   try {
     running.value = true
-    result.value = await apiStore.runBatch(sourceId.value, maxItems.value, projectId)
+    result.value = await apiStore.runBatch(sourceId.value, maxItems.value, effectiveProjectId)
   } catch (err) {
     console.error('Run failed:', err)
     alert('Run failed: ' + (err as Error).message)
@@ -180,11 +220,15 @@ async function runBatch() {
 
 async function setCursor() {
   if (!sourceId.value || !cursorPublishedAt.value) return
+  const effectiveProjectId = getEffectiveProjectId()
+  if (!effectiveProjectId) return
 
   try {
     updatingCursor.value = true
     const cursorIso = new Date(cursorPublishedAt.value).toISOString()
-    const response = await apiStore.updateSourceCursor(sourceId.value, cursorIso, true, projectId)
+    const response = await apiStore.updateSourceCursor(sourceId.value, cursorIso, true, effectiveProjectId)
+    sourceCursorById.value[sourceId.value] = isoToDatetimeLocal(response.cursor_published_at)
+    syncCursorInputForSource()
     alert(`Next run filter updated for ${response.source_id}: RSS pubDate after ${formatUtcMinute(response.cursor_published_at)}`)
   } catch (err) {
     console.error('Set cursor failed:', err)
@@ -196,11 +240,14 @@ async function setCursor() {
 
 async function clearCursor() {
   if (!sourceId.value) return
+  const effectiveProjectId = getEffectiveProjectId()
+  if (!effectiveProjectId) return
 
   try {
     updatingCursor.value = true
-    const response = await apiStore.updateSourceCursor(sourceId.value, null, true, projectId)
-    cursorPublishedAt.value = ''
+    const response = await apiStore.updateSourceCursor(sourceId.value, null, true, effectiveProjectId)
+    sourceCursorById.value[sourceId.value] = ''
+    syncCursorInputForSource()
     alert(`Next run date filter removed for ${response.source_id}`)
   } catch (err) {
     console.error('Clear cursor failed:', err)
@@ -209,6 +256,10 @@ async function clearCursor() {
     updatingCursor.value = false
   }
 }
+
+watch(sourceId, () => {
+  syncCursorInputForSource()
+})
 
 onMounted(loadActiveProject)
 </script>

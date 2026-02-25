@@ -500,9 +500,76 @@ function buildRerankPassage(payload: unknown, maxChars: number): string {
   return text.slice(0, maxChars);
 }
 
+function extractRssSummaryMetrics(
+  pluginType: string,
+  batchResult: { items: unknown[]; newState: unknown; diagnostics?: unknown } | null
+): Record<string, number> | undefined {
+  if (!batchResult) {
+    return undefined;
+  }
+
+  const normalizedPluginType = pluginType.trim().toLowerCase();
+  if (normalizedPluginType !== 'rss_source' && normalizedPluginType !== 'rss' && normalizedPluginType !== 'hacker-news') {
+    return undefined;
+  }
+
+  const diagnostics = batchResult.diagnostics;
+  if (!diagnostics || typeof diagnostics !== 'object') {
+    return undefined;
+  }
+
+  const d = diagnostics as Record<string, unknown>;
+  const toSafeInt = (value: unknown): number => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return 0;
+    }
+    return Math.max(0, Math.floor(value));
+  };
+
+  return {
+    normalized_items_count: toSafeInt(d.normalized_items_count),
+    accepted_before_limit_count: toSafeInt(d.accepted_before_limit_count),
+    accepted_count: toSafeInt(d.accepted_count),
+    filtered_by_dedupe: toSafeInt(d.filtered_by_dedupe),
+    filtered_by_older_than_cursor: toSafeInt(d.filtered_by_older_than_cursor),
+    filtered_by_cursor_tie_id: toSafeInt(d.filtered_by_cursor_tie_id),
+    filtered_by_limit: toSafeInt(d.filtered_by_limit)
+  };
+}
+
 async function getTableColumns(env: Env, table: 'commits' | 'source_state' | 'curated_docs'): Promise<Set<string>> {
   const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
   return new Set((results ?? []).map((row) => row.name));
+}
+
+function makeScopedSourceStateId(projectId: string, sourceId: string): string {
+  return `${projectId}::${sourceId}`;
+}
+
+async function readSourceStateWithFallback(
+  env: Env,
+  projectId: string,
+  sourceId: string
+): Promise<Record<string, unknown>> {
+  const scopedSourceId = makeScopedSourceStateId(projectId, sourceId);
+
+  const row = await env.DB.prepare(
+    `SELECT state
+     FROM source_state
+     WHERE source_id IN (?, ?)
+     ORDER BY CASE WHEN source_id = ? THEN 0 ELSE 1 END, updated_at DESC
+     LIMIT 1`
+  ).bind(scopedSourceId, sourceId, scopedSourceId).first<{ state: string }>();
+
+  if (!row?.state) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(row.state) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 async function upsertSourceState(
@@ -1104,16 +1171,8 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
     }
 
     const now = new Date().toISOString();
-    const existingStateRow = await env.DB.prepare(
-      'SELECT state FROM source_state WHERE source_id = ?'
-    ).bind(sourceId).first<{ state: string }>();
-
-    let oldState: Record<string, unknown> = {};
-    try {
-      oldState = existingStateRow?.state ? JSON.parse(existingStateRow.state) : {};
-    } catch {
-      oldState = {};
-    }
+    const scopedSourceStateId = makeScopedSourceStateId(configResult.config.project_id, sourceId);
+    const oldState = await readSourceStateWithFallback(env, configResult.config.project_id, sourceId);
 
     const newState: Record<string, unknown> = {
       ...oldState,
@@ -1150,7 +1209,7 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
     await upsertSourceState(
       env,
       sourceStateColumns,
-      sourceId,
+      scopedSourceStateId,
       newState,
       now,
       { commitId: cursorCommit.commitId, commitKey: cursorCommit.commitKey }
@@ -1213,11 +1272,27 @@ async function handleSeedRoute(env: Env): Promise<Response> {
 async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   const startTime = Date.now();
   const url = new URL(request.url);
+  const traceId = crypto.randomUUID();
+  const verboseLogging = /^(1|true|yes|on)$/i.test(String(env.LOG_VERBOSE ?? 'false'));
   let body: {
     source_id?: string;
     max_items?: number;
     project_id?: string;
   } = {};
+
+  const logRun = (event: string, details: Record<string, unknown> = {}) => {
+    if (!verboseLogging && event !== 'run.summary') {
+      return;
+    }
+
+    console.log(JSON.stringify({
+      event,
+      endpoint: '/run',
+      trace_id: traceId,
+      elapsed_ms: Date.now() - startTime,
+      ...details
+    }));
+  };
 
   try {
     body = await request.json();
@@ -1236,7 +1311,23 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   );
   const projectId = (body.project_id || url.searchParams.get('project_id') || '').trim();
 
+  logRun('run.request.received', {
+    method: request.method,
+    project_id: projectId || null,
+    requested_source_id: sourceId,
+    max_items: maxItems
+  });
+
   if (!projectId) {
+    logRun('run.summary', {
+      status: 'invalid',
+      reason: 'project_id_missing',
+      project_id: null,
+      source_id: sourceId,
+      items_processed: 0,
+      events_written: 0
+    });
+    logRun('run.request.invalid', { reason: 'project_id_missing' });
     return new Response(JSON.stringify({ error: 'project_id is required' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
@@ -1246,6 +1337,19 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   // Get scoped config
   const configResult = await readConfig(env, projectId);
   if (configResult.error || !configResult.config) {
+    logRun('run.summary', {
+      status: 'invalid',
+      reason: 'project_not_found',
+      project_id: projectId,
+      source_id: sourceId,
+      items_processed: 0,
+      events_written: 0
+    });
+    logRun('run.request.invalid', {
+      reason: 'project_not_found',
+      project_id: projectId,
+      error: configResult.error || null
+    });
     return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), { 
       status: 400,
       headers: { 'Content-Type': 'application/json' }
@@ -1257,7 +1361,25 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   const isSourceEnabled = (source: { enabled?: boolean }) => source.enabled !== false;
   const enabledSources = config.sources.filter(isSourceEnabled);
 
+  logRun('run.config.loaded', {
+    project_id: config.project_id,
+    total_sources: config.sources.length,
+    enabled_sources: enabledSources.length
+  });
+
   if (enabledSources.length === 0) {
+    logRun('run.summary', {
+      status: 'invalid',
+      reason: 'no_enabled_sources',
+      project_id: config.project_id,
+      source_id: sourceId,
+      items_processed: 0,
+      events_written: 0
+    });
+    logRun('run.request.invalid', {
+      reason: 'no_enabled_sources',
+      project_id: config.project_id
+    });
     return new Response(JSON.stringify({
       error: 'No enabled sources found for this project',
       available_sources: config.sources.map((s) => ({
@@ -1280,6 +1402,19 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     : null;
 
   if (sourceId && requestedSource && !isSourceEnabled(requestedSource)) {
+    logRun('run.summary', {
+      status: 'invalid',
+      reason: 'requested_source_paused',
+      project_id: config.project_id,
+      source_id: sourceId,
+      items_processed: 0,
+      events_written: 0
+    });
+    logRun('run.request.invalid', {
+      reason: 'requested_source_paused',
+      project_id: config.project_id,
+      source_id: sourceId
+    });
     return new Response(JSON.stringify({
       error: `Source is paused: ${sourceId}`,
       source_id: sourceId,
@@ -1291,6 +1426,19 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   }
   
   if (!sourceConfig) {
+    logRun('run.summary', {
+      status: 'invalid',
+      reason: 'source_not_found',
+      project_id: config.project_id,
+      source_id: sourceId,
+      items_processed: 0,
+      events_written: 0
+    });
+    logRun('run.request.invalid', {
+      reason: 'source_not_found',
+      project_id: config.project_id,
+      requested_source_id: sourceId
+    });
     return new Response(JSON.stringify({ 
       error: 'No source found',
       available_sources: enabledSources.map((s) => s.id)
@@ -1304,6 +1452,12 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   let source;
   const pluginType = sourceConfig.plugin;
   const sourceConfigData = (sourceConfig.config || {}) as Record<string, unknown>;
+
+  logRun('run.source.selected', {
+    project_id: config.project_id,
+    source_id: sourceConfig.id,
+    source_plugin: pluginType
+  });
   
   if (pluginType === 'rss_source' || pluginType === 'rss' || pluginType === 'hacker-news') {
     source = new RSSSource({
@@ -1311,6 +1465,20 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       user_agent: 'Delta-Curator/1.0'
     });
   } else {
+    logRun('run.summary', {
+      status: 'invalid',
+      reason: 'unsupported_source_plugin',
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      items_processed: 0,
+      events_written: 0
+    });
+    logRun('run.request.invalid', {
+      reason: 'unsupported_source_plugin',
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      source_plugin: pluginType
+    });
     return new Response(JSON.stringify({ 
       error: `Unsupported source plugin: ${pluginType}` 
     }), { 
@@ -1319,12 +1487,18 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     });
   }
   
+  const scopedSourceStateId = makeScopedSourceStateId(config.project_id, sourceConfig.id);
+
   // Create plugins
   const comparator = new FingerprintComparator();
   const decider = new RulesDecider();
-  
-  // Generate trace ID
-  const traceId = crypto.randomUUID();
+  let rssMetrics: Record<string, number> | undefined;
+  let rankingEnabledForRun = false;
+  let rankingQueryPresentForRun = false;
+  let rankingAppliedForRun = false;
+  let rankingScoredItemsForRun = 0;
+  let cursorBefore: string | null = null;
+  let cursorAfter: string | null = null;
   
   try {
     const commitColumns = await getTableColumns(env, 'commits');
@@ -1332,16 +1506,25 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     const curatedDocColumns = await getTableColumns(env, 'curated_docs');
 
     // Get source state
-    const { results: stateResults } = await env.DB.prepare(
-      'SELECT state FROM source_state WHERE source_id = ?'
-    ).bind(sourceConfig.id).all<{ state: string }>();
-    
-    const sourceState = stateResults[0]?.state ? JSON.parse(stateResults[0].state) : {};
+    const sourceState = await readSourceStateWithFallback(env, config.project_id, sourceConfig.id);
     
     // Read batch from source
     const batchResult = await source.readBatch(sourceState, maxItems);
     
     if (!batchResult) {
+      logRun('run.summary', {
+        status: 'empty_batch',
+        project_id: config.project_id,
+        source_id: sourceConfig.id,
+        items_processed: 0,
+        events_written: 0
+      });
+      logRun('run.batch.empty', {
+        project_id: config.project_id,
+        source_id: sourceConfig.id,
+        items_processed: 0,
+        events_written: 0
+      });
       return new Response(JSON.stringify({ 
         commit_id: null,
         trace_id: traceId,
@@ -1354,6 +1537,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     }
     
     const items = batchResult.items;
+    rssMetrics = extractRssSummaryMetrics(pluginType, batchResult as { items: unknown[]; newState: unknown; diagnostics?: unknown });
+    cursorBefore = typeof (sourceState as Record<string, unknown>)?.cursorPublishedAt === 'string'
+      ? (sourceState as Record<string, unknown>).cursorPublishedAt as string
+      : null;
+    cursorAfter = typeof (batchResult.newState as Record<string, unknown>)?.cursorPublishedAt === 'string'
+      ? (batchResult.newState as Record<string, unknown>).cursorPublishedAt as string
+      : null;
 
     const ingestRanking = config.pipeline?.ranking?.ingest;
     const rankingEnabled = Boolean(
@@ -1372,22 +1562,81 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       : 4000;
     const rankingThreshold = 0.2;
     const rankScoresByItem = new Map<string, number>();
+    let rankingApplied = false;
+
+    rankingEnabledForRun = rankingEnabled;
+    rankingQueryPresentForRun = Boolean(rankingQuery);
+
+    logRun('run.ranking.config', {
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      ranking_enabled: rankingEnabled,
+      ranking_query_source: typeof ingestRanking?.query === 'string' && ingestRanking.query.trim().length > 0 ? 'explicit' : 'topic_label',
+      ranking_query_length: rankingQuery.length,
+      ranking_model: rankingModel,
+      ranking_max_passage_chars: rankingMaxPassageChars,
+      ranking_threshold: rankingThreshold,
+      item_count: items.length
+    });
 
     if (rankingEnabled && rankingQuery) {
-      const ranker = new WorkersAIRanker(env.AI, rankingQuery, rankingModel, rankingMaxPassageChars);
       const passages = items.map((item) => ({
         id: item.source_item_id,
         text: buildRerankPassage(item.payload, rankingMaxPassageChars)
       }));
-      const scores = await ranker.score(passages);
-      for (const score of scores) {
-        rankScoresByItem.set(score.id, score.score);
+
+      if (passages.length === 0) {
+        logRun('run.ranking.skipped', {
+          project_id: config.project_id,
+          source_id: sourceConfig.id,
+          reason: 'no_items'
+        });
+      } else {
+        const ranker = new WorkersAIRanker(env.AI, rankingQuery, rankingModel, rankingMaxPassageChars);
+        const scores = await ranker.score(passages);
+        if (scores.length === passages.length) {
+          for (const score of scores) {
+            rankScoresByItem.set(score.id, score.score);
+          }
+          rankingApplied = true;
+          rankingAppliedForRun = true;
+          rankingScoredItemsForRun = scores.length;
+
+          logRun('run.ranking.completed', {
+            project_id: config.project_id,
+            source_id: sourceConfig.id,
+            scored_items: scores.length
+          });
+        } else {
+          logRun('run.ranking.fallback', {
+            project_id: config.project_id,
+            source_id: sourceConfig.id,
+            reason: 'scoring_failed_or_incomplete',
+            scored_items: scores.length,
+            expected_items: passages.length
+          });
+        }
       }
     }
     
     // Process each item
     const events: any[] = [];
     const now = new Date().toISOString();
+    let skippedExisting = 0;
+    let skippedLowRank = 0;
+    let skippedByDecision = 0;
+    const shouldLogLoopIteration = (index: number, total: number) => {
+      if (total <= 25) return true;
+      if (index < 5) return true;
+      if (index === total - 1) return true;
+      return (index + 1) % 25 === 0;
+    };
+
+    logRun('run.loop.started', {
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      total_items: items.length
+    });
     
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -1402,12 +1651,35 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       ).bind(eventId).first();
       
       if (existing) {
+        skippedExisting += 1;
+        if (shouldLogLoopIteration(i, items.length)) {
+          logRun('run.loop.iteration', {
+            project_id: config.project_id,
+            source_id: sourceConfig.id,
+            index: i,
+            total_items: items.length,
+            source_item_id: item.source_item_id,
+            outcome: 'skipped_existing'
+          });
+        }
         continue; // Skip duplicate
       }
 
-      if (rankingEnabled && rankingQuery) {
+      if (rankingApplied) {
         const rankScore = rankScoresByItem.get(item.source_item_id) ?? 0;
         if (rankScore < rankingThreshold) {
+          skippedLowRank += 1;
+          if (shouldLogLoopIteration(i, items.length)) {
+            logRun('run.loop.iteration', {
+              project_id: config.project_id,
+              source_id: sourceConfig.id,
+              index: i,
+              total_items: items.length,
+              source_item_id: item.source_item_id,
+              outcome: 'skipped_low_rank',
+              rank_score: rankScore
+            });
+          }
           continue;
         }
       }
@@ -1440,6 +1712,18 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       
       // Only process if append (accept)
       if (decision.decision !== 'append') {
+        skippedByDecision += 1;
+        if (shouldLogLoopIteration(i, items.length)) {
+          logRun('run.loop.iteration', {
+            project_id: config.project_id,
+            source_id: sourceConfig.id,
+            index: i,
+            total_items: items.length,
+            source_item_id: item.source_item_id,
+            outcome: 'skipped_decision',
+            decision: decision.decision
+          });
+        }
         continue;
       }
       
@@ -1460,9 +1744,57 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       };
       
       events.push(event);
+
+      if (shouldLogLoopIteration(i, items.length)) {
+        logRun('run.loop.iteration', {
+          project_id: config.project_id,
+          source_id: sourceConfig.id,
+          index: i,
+          total_items: items.length,
+          source_item_id: item.source_item_id,
+          outcome: 'event_created'
+        });
+      }
     }
+
+    logRun('run.loop.finished', {
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      total_items: items.length,
+      events_created: events.length,
+      skipped_existing: skippedExisting,
+      skipped_low_rank: skippedLowRank,
+      skipped_by_decision: skippedByDecision
+    });
     
     if (events.length === 0) {
+      logRun('run.summary', {
+        status: 'no_novel_events',
+        project_id: config.project_id,
+        source_id: sourceConfig.id,
+        items_processed: items.length,
+        events_written: 0,
+        skipped_existing: skippedExisting,
+        skipped_low_rank: skippedLowRank,
+        skipped_by_decision: skippedByDecision,
+        cursor_before: cursorBefore,
+        cursor_after: cursorAfter,
+        ranking_enabled: rankingEnabledForRun,
+        ranking_query_present: rankingQueryPresentForRun,
+        ranking_applied: rankingAppliedForRun,
+        ranking_scored_items: rankingScoredItemsForRun,
+        rss_metrics: rssMetrics
+      });
+      logRun('run.processing.no_novel_events', {
+        project_id: config.project_id,
+        source_id: sourceConfig.id,
+        items_processed: items.length,
+        events_written: 0,
+        skipped_existing: skippedExisting,
+        skipped_low_rank: skippedLowRank,
+        skipped_by_decision: skippedByDecision
+      });
+
       // Update source state even if no new events
       let cursorCommitId: string | null = null;
       if (sourceStateColumns.has('last_commit_id') && sourceStateColumns.has('last_commit_key')) {
@@ -1481,7 +1813,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         await upsertSourceState(
           env,
           sourceStateColumns,
-          sourceConfig.id,
+          scopedSourceStateId,
           batchResult.newState,
           now,
           { commitId: cursorCommit.commitId, commitKey: cursorCommit.commitKey }
@@ -1490,7 +1822,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         await upsertSourceState(
           env,
           sourceStateColumns,
-          sourceConfig.id,
+          scopedSourceStateId,
           batchResult.newState,
           now
         );
@@ -1656,11 +1988,41 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     await upsertSourceState(
       env,
       sourceStateColumns,
-      sourceConfig.id,
+      scopedSourceStateId,
       batchResult.newState,
       now,
       { commitId, commitKey }
     );
+
+    logRun('run.summary', {
+      status: 'completed',
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      commit_id: commitId,
+      items_processed: items.length,
+      events_written: events.length,
+      skipped_existing: skippedExisting,
+      skipped_low_rank: skippedLowRank,
+      skipped_by_decision: skippedByDecision,
+      cursor_before: cursorBefore,
+      cursor_after: cursorAfter,
+      ranking_enabled: rankingEnabledForRun,
+      ranking_query_present: rankingQueryPresentForRun,
+      ranking_applied: rankingAppliedForRun,
+      ranking_scored_items: rankingScoredItemsForRun,
+      rss_metrics: rssMetrics
+    });
+
+    logRun('run.completed', {
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      commit_id: commitId,
+      items_processed: items.length,
+      events_written: events.length,
+      skipped_existing: skippedExisting,
+      skipped_low_rank: skippedLowRank,
+      skipped_by_decision: skippedByDecision
+    });
     
     return new Response(JSON.stringify({ 
       commit_id: commitId,
@@ -1675,6 +2037,25 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     });
     
   } catch (error: any) {
+    logRun('run.summary', {
+      status: 'failed',
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      error: error?.message || String(error),
+      cursor_before: cursorBefore,
+      cursor_after: cursorAfter,
+      ranking_enabled: rankingEnabledForRun,
+      ranking_query_present: rankingQueryPresentForRun,
+      ranking_applied: rankingAppliedForRun,
+      ranking_scored_items: rankingScoredItemsForRun,
+      rss_metrics: rssMetrics
+    });
+    logRun('run.failed', {
+      project_id: config.project_id,
+      source_id: sourceConfig.id,
+      error: error?.message || String(error)
+    });
+
     return new Response(JSON.stringify({ 
       error: error.message || 'Run failed',
       trace_id: traceId
@@ -1686,13 +2067,33 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
 }
 
 async function handleInspectRoute(env: Env, request: Request): Promise<Response> {
+  const startTime = Date.now();
+  const traceId = crypto.randomUUID();
+  const logInspect = (event: string, details: Record<string, unknown> = {}) => {
+    console.log(JSON.stringify({
+      event,
+      endpoint: '/inspect',
+      trace_id: traceId,
+      elapsed_ms: Date.now() - startTime,
+      ...details
+    }));
+  };
+
   try {
     const url = new URL(request.url);
     const since = url.searchParams.get('since') || 'PT24H';
     const format = url.searchParams.get('format') || 'markdown';
     const projectId = (url.searchParams.get('project_id') || '').trim();
 
+    logInspect('inspect.request.received', {
+      method: request.method,
+      since,
+      format,
+      project_id: projectId || null
+    });
+
     if (!projectId) {
+      logInspect('inspect.request.invalid', { reason: 'project_id_missing' });
       return new Response(JSON.stringify({ error: 'project_id is required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
@@ -1704,6 +2105,11 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
 
     const configResult = await readConfig(env, projectId);
     if (configResult.error || !configResult.config) {
+      logInspect('inspect.request.invalid', {
+        reason: 'project_not_found',
+        project_id: projectId,
+        error: configResult.error || null
+      });
       return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
@@ -1712,6 +2118,11 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
 
     scopedProjectId = configResult.config.project_id;
     scopedSourceIds = configResult.config.sources.map((source) => source.id);
+
+    logInspect('inspect.scope.loaded', {
+      project_id: scopedProjectId,
+      source_count: scopedSourceIds.length
+    });
 
     if (scopedSourceIds && scopedSourceIds.length === 0) {
       const markdown = [
@@ -1731,6 +2142,11 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
       ].join('\n');
 
       if (format === 'json') {
+        logInspect('inspect.completed', {
+          project_id: scopedProjectId,
+          format,
+          source_count: 0
+        });
         return new Response(JSON.stringify({
           since,
           generated_at: new Date().toISOString(),
@@ -1742,27 +2158,37 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
         });
       }
 
+      logInspect('inspect.completed', {
+        project_id: scopedProjectId,
+        format,
+        source_count: 0
+      });
       return new Response(markdown, {
         headers: { 'Content-Type': 'text/markdown' }
       });
     }
 
-    const stateRows = scopedSourceIds
+    const sourceStateLookupKeys = scopedSourceIds
+      ? scopedSourceIds.flatMap((id) => [makeScopedSourceStateId(scopedProjectId || '', id), id])
+      : [];
+
+    const stateRows = sourceStateLookupKeys.length > 0
       ? await env.DB.prepare(
         `SELECT source_id, state, updated_at
          FROM source_state
-         WHERE source_id IN (${scopedSourceIds.map(() => '?').join(', ')})
+         WHERE source_id IN (${sourceStateLookupKeys.map(() => '?').join(', ')})
          ORDER BY updated_at DESC`
-      ).bind(...scopedSourceIds).all<{ source_id: string; state: string; updated_at: string }>()
+      ).bind(...sourceStateLookupKeys).all<{ source_id: string; state: string; updated_at: string }>()
       : await env.DB.prepare(
         `SELECT source_id, state, updated_at
          FROM source_state
          ORDER BY updated_at DESC`
       ).all<{ source_id: string; state: string; updated_at: string }>();
 
-    const stateBySourceId = new Map((stateRows.results || []).map((row) => [row.source_id, row] as const));
+    const rowsBySourceStateId = new Map((stateRows.results || []).map((row) => [row.source_id, row] as const));
     const sources = configResult.config.sources.map((source) => {
-      const row = stateBySourceId.get(source.id);
+      const scopedKey = makeScopedSourceStateId(scopedProjectId || '', source.id);
+      const row = rowsBySourceStateId.get(scopedKey) ?? rowsBySourceStateId.get(source.id);
 
       let parsedState: Record<string, unknown> = {};
       try {
@@ -1820,6 +2246,11 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
     const markdown = `${markdownLines.join('\n')}\n`;
 
     if (format === 'json') {
+      logInspect('inspect.completed', {
+        project_id: scopedProjectId,
+        format,
+        source_count: sources.length
+      });
       return new Response(JSON.stringify({
         since,
         generated_at: new Date().toISOString(),
@@ -1831,10 +2262,18 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
       });
     }
 
+    logInspect('inspect.completed', {
+      project_id: scopedProjectId,
+      format,
+      source_count: sources.length
+    });
     return new Response(markdown, {
       headers: { 'Content-Type': 'text/markdown' }
     });
   } catch (err: any) {
+    logInspect('inspect.failed', {
+      error: err?.message || String(err)
+    });
     return new Response(JSON.stringify({ error: err?.message || String(err) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
@@ -1844,15 +2283,35 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
 
 async function handleSearchRoute(env: Env, request: Request): Promise<Response> {
   const startTime = Date.now();
+  const traceId = crypto.randomUUID();
   const url = new URL(request.url);
   const q = url.searchParams.get('q') || '';
   const k = parseInt(url.searchParams.get('k') || '20', 10);
   const rerank = url.searchParams.get('rerank') === 'true';
   const projectId = (url.searchParams.get('project_id') || '').trim();
   const sourceId = (url.searchParams.get('source_id') || '').trim();
+  const logSearch = (event: string, details: Record<string, unknown> = {}) => {
+    console.log(JSON.stringify({
+      event,
+      endpoint: '/search',
+      trace_id: traceId,
+      elapsed_ms: Date.now() - startTime,
+      ...details
+    }));
+  };
+
+  logSearch('search.request.received', {
+    method: request.method,
+    query_length: q.length,
+    k,
+    rerank,
+    project_id: projectId || null,
+    source_id: sourceId || null
+  });
   
   try {
     if (!projectId) {
+      logSearch('search.request.invalid', { reason: 'project_id_missing' });
       return new Response(JSON.stringify({
         error: 'project_id is required',
         query: q,
@@ -1871,6 +2330,11 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
 
     const configResult = await readConfig(env, projectId);
     if (configResult.error || !configResult.config) {
+      logSearch('search.request.invalid', {
+        reason: 'project_not_found',
+        project_id: projectId,
+        error: configResult.error || null
+      });
       return new Response(JSON.stringify({
         error: configResult.error || `Unknown project_id: ${projectId}`,
         query: q,
@@ -1886,8 +2350,18 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
     }
 
     allowedSourceIds = configResult.config.sources.map((source) => source.id);
+    logSearch('search.scope.loaded', {
+      project_id: projectId,
+      source_count: allowedSourceIds.length
+    });
+
     if (sourceId) {
       if (!allowedSourceIds.includes(sourceId)) {
+        logSearch('search.request.invalid', {
+          reason: 'source_not_in_project',
+          project_id: projectId,
+          source_id: sourceId
+        });
         return new Response(JSON.stringify({
           error: `source_id ${sourceId} is not part of project ${projectId}`,
           query: q,
@@ -1905,6 +2379,11 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
     }
 
     if (allowedSourceIds && allowedSourceIds.length === 0) {
+      logSearch('search.completed', {
+        project_id: projectId,
+        source_id: sourceId || null,
+        total: 0
+      });
       return new Response(JSON.stringify({
         query: q,
         k,
@@ -2007,6 +2486,13 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
     }
     
     const tookMs = Date.now() - startTime;
+
+    logSearch('search.completed', {
+      project_id: projectId,
+      source_id: sourceId || null,
+      total: docs.length,
+      took_ms: tookMs
+    });
     
     return new Response(JSON.stringify({ 
       query: q, 
@@ -2021,6 +2507,11 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (err: any) {
+    logSearch('search.failed', {
+      project_id: projectId || null,
+      source_id: sourceId || null,
+      error: err?.message || String(err)
+    });
     return new Response(JSON.stringify({ 
       error: `Search failed: ${err.message || err}`,
       query: q,

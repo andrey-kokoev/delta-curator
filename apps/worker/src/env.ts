@@ -14,6 +14,7 @@ export interface Env {
   DB: D1Database;
   ARTIFACTS: R2Bucket;
   AI: Ai;
+  LOG_VERBOSE?: string;
   
   // Auth
   AUTH_SECRET: string;

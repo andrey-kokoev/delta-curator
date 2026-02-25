@@ -18,6 +18,16 @@ interface RSSFeed {
   items: RSSItem[];
 }
 
+interface RSSReadDiagnostics {
+  normalized_items_count: number;
+  accepted_before_limit_count: number;
+  accepted_count: number;
+  filtered_by_dedupe: number;
+  filtered_by_older_than_cursor: number;
+  filtered_by_cursor_tie_id: number;
+  filtered_by_limit: number;
+}
+
 function parsePubDate(pubDate?: string): number | null {
   if (!pubDate) {
     return null;
@@ -132,7 +142,20 @@ export class RSSSource {
   async readBatch(
     state: SourceState,
     maxItems: number
-  ): Promise<{ items: RawDocObserved[]; newState: SourceState } | null> {
+  ): Promise<{ items: RawDocObserved[]; newState: SourceState; diagnostics?: RSSReadDiagnostics } | null> {
+    const startedAt = Date.now();
+    const readId = crypto.randomUUID();
+    const logRss = (event: string, details: Record<string, unknown> = {}) => {
+      console.log(JSON.stringify({
+        event,
+        plugin: 'rss_source',
+        read_id: readId,
+        feed_url: this.feedUrl,
+        elapsed_ms: Date.now() - startedAt,
+        ...details
+      }));
+    };
+
     const nowIso = new Date().toISOString();
     const cursorPublishedAt = typeof state?.cursorPublishedAt === 'string'
       ? state.cursorPublishedAt
@@ -162,6 +185,16 @@ export class RSSSource {
     const etag = typeof state?.etag === 'string' ? state.etag : undefined;
     const lastModified = typeof state?.lastModified === 'string' ? state.lastModified : undefined;
 
+    logRss('rss.read.started', {
+      max_items: maxItems,
+      has_cursor_published_at: Boolean(cursorPublishedAt),
+      cursor_published_at: cursorPublishedAt ?? null,
+      cursor_ids_count: cursorIds.size,
+      recent_ids_count: recentGuids.size,
+      has_etag: Boolean(etag),
+      has_last_modified: Boolean(lastModified)
+    });
+
     try {
       // Fetch RSS feed
       const response = await fetch(this.feedUrl, {
@@ -173,7 +206,18 @@ export class RSSSource {
         }
       });
 
+      logRss('rss.fetch.completed', {
+        status: response.status,
+        ok: response.ok,
+        has_response_etag: Boolean(response.headers.get('etag')),
+        has_response_last_modified: Boolean(response.headers.get('last-modified'))
+      });
+
       if (response.status === 304) {
+        logRss('rss.read.not_modified', {
+          status: 304,
+          items_returned: 0
+        });
         return {
           items: [],
           newState: {
@@ -191,6 +235,11 @@ export class RSSSource {
 
       const xml = await response.text();
       const feed = parseRSS(xml);
+
+      logRss('rss.parse.completed', {
+        xml_bytes: xml.length,
+        raw_items_count: feed.items.length
+      });
 
       const normalizedItems = feed.items
         .map((item, index) => {
@@ -222,28 +271,73 @@ export class RSSSource {
           return a.index - b.index;
         });
 
+      let filteredByDedupe = 0;
+      let filteredByOlderThanCursor = 0;
+      let filteredByCursorTieId = 0;
+
+      const acceptedForWindow: { item: RSSItem; stableId: string; effectiveTsMs: number | null; index: number }[] = [];
+
+      for (const candidate of normalizedItems) {
+        const { stableId, effectiveTsMs } = candidate;
+
+        if (cursorPublishedAtMs === null) {
+          if (recentGuids.has(stableId)) {
+            filteredByDedupe += 1;
+            continue;
+          }
+          acceptedForWindow.push(candidate);
+          continue;
+        }
+
+        if (effectiveTsMs === null) {
+          if (recentGuids.has(stableId)) {
+            filteredByDedupe += 1;
+            continue;
+          }
+          acceptedForWindow.push(candidate);
+          continue;
+        }
+
+        if (effectiveTsMs > cursorPublishedAtMs) {
+          acceptedForWindow.push(candidate);
+          continue;
+        }
+
+        if (effectiveTsMs < cursorPublishedAtMs) {
+          filteredByOlderThanCursor += 1;
+          continue;
+        }
+
+        if (cursorIds.has(stableId)) {
+          filteredByCursorTieId += 1;
+          continue;
+        }
+
+        acceptedForWindow.push(candidate);
+      }
+
       // Filter to new items by cursor watermark + cursor tie IDs + recent dedupe fallback
-      const accepted = normalizedItems
-        .filter(({ stableId, effectiveTsMs }) => {
-          if (cursorPublishedAtMs === null) {
-            return !recentGuids.has(stableId);
-          }
+      const accepted = acceptedForWindow.slice(0, maxItems);
+      const diagnostics: RSSReadDiagnostics = {
+        normalized_items_count: normalizedItems.length,
+        accepted_before_limit_count: acceptedForWindow.length,
+        accepted_count: accepted.length,
+        filtered_by_dedupe: filteredByDedupe,
+        filtered_by_older_than_cursor: filteredByOlderThanCursor,
+        filtered_by_cursor_tie_id: filteredByCursorTieId,
+        filtered_by_limit: Math.max(acceptedForWindow.length - accepted.length, 0)
+      };
 
-          if (effectiveTsMs === null) {
-            return !recentGuids.has(stableId);
-          }
-
-          if (effectiveTsMs > cursorPublishedAtMs) {
-            return true;
-          }
-
-          if (effectiveTsMs < cursorPublishedAtMs) {
-            return false;
-          }
-
-          return !cursorIds.has(stableId);
-        })
-        .slice(0, maxItems);
+      logRss('rss.filter.completed', {
+        normalized_items_count: diagnostics.normalized_items_count,
+        accepted_before_limit_count: diagnostics.accepted_before_limit_count,
+        accepted_count: diagnostics.accepted_count,
+        max_items: maxItems,
+        filtered_by_dedupe: diagnostics.filtered_by_dedupe,
+        filtered_by_older_than_cursor: diagnostics.filtered_by_older_than_cursor,
+        filtered_by_cursor_tie_id: diagnostics.filtered_by_cursor_tie_id,
+        filtered_by_limit: diagnostics.filtered_by_limit
+      });
 
       // Create RawDocObserved items
       const items: RawDocObserved[] = [];
@@ -284,8 +378,16 @@ export class RSSSource {
       const dedupedRecentGuids = Array.from(new Set(mergedRecentGuids)).slice(-this.maxRecentIds);
       const dedupedCursorIds = Array.from(nextCursorIds).slice(-this.maxCursorIds);
 
+      logRss('rss.read.completed', {
+        items_returned: items.length,
+        next_cursor_published_at: nextCursorMs !== null ? new Date(nextCursorMs).toISOString() : cursorPublishedAt ?? null,
+        next_cursor_ids_count: dedupedCursorIds.length,
+        next_recent_ids_count: dedupedRecentGuids.length
+      });
+
       return {
         items,
+        diagnostics,
         newState: {
           cursorPublishedAt: nextCursorMs !== null ? new Date(nextCursorMs).toISOString() : cursorPublishedAt,
           cursorIds: dedupedCursorIds,
@@ -300,6 +402,9 @@ export class RSSSource {
         }
       };
     } catch (err) {
+      logRss('rss.read.failed', {
+        error: (err as Error)?.message || String(err)
+      });
       console.error('Error reading RSS feed:', err);
       throw err;
     }
