@@ -8,7 +8,7 @@
  */
 
 import { createHash } from 'crypto';
-import { canonicalJson, semanticCore } from './canonicalization.js';
+import { canonicalJson } from './canonicalization.js';
 
 /**
  * Computes SHA256 hash of canonical JSON

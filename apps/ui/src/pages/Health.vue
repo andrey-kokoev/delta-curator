@@ -21,7 +21,7 @@
         <div
           :class="[
             'h-12 w-12 rounded-full flex items-center justify-center',
-            health.ok ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'
+            health.ok ? 'bg-success-muted text-success' : 'bg-destructive/15 text-destructive'
           ]"
         >
           <Heart v-if="health.ok" class="h-6 w-6" />

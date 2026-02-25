@@ -79,10 +79,10 @@
 
         <div
           v-if="currentStep === steps.length - 1 && isFormValid"
-          class="rounded-lg border border-green-300 bg-green-50 p-4"
+          class="rounded-lg border border-success/25 bg-success-muted p-4"
         >
-          <p class="mb-2 text-sm font-medium text-green-800">Ready to add source</p>
-          <pre class="overflow-x-auto rounded bg-green-100 p-2 text-xs">{{ JSON.stringify(buildSource(), null, 2) }}</pre>
+          <p class="mb-2 text-sm font-medium text-success-foreground">Ready to add source</p>
+          <pre class="overflow-x-auto rounded bg-success/20 p-2 text-xs">{{ JSON.stringify(buildSource(), null, 2) }}</pre>
         </div>
       </div>
 

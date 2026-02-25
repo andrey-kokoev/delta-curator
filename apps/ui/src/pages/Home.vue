@@ -36,7 +36,7 @@
           <Activity class="h-4 w-4 text-muted-foreground" />
           <span class="text-sm font-medium">Status</span>
         </div>
-        <p class="mt-2 text-lg font-bold" :class="health?.ok ? 'text-green-600' : 'text-red-600'">
+        <p class="mt-2 text-lg font-bold" :class="health?.ok ? 'text-success' : 'text-destructive'">
           {{ health?.ok ? 'Healthy' : 'Error' }}
         </p>
       </div>

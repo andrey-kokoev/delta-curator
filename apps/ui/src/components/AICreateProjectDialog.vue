@@ -82,13 +82,13 @@
               </p>
 
               <!-- Help Text -->
-              <div v-if="currentStepData.help" class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <div v-if="currentStepData.help" class="bg-info-muted border border-info/25 rounded-lg p-3">
                 <div class="flex items-start gap-3">
-                  <div class="w-5 h-5 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
-                    <span class="text-xs text-blue-600">💡</span>
+                  <div class="w-5 h-5 bg-info/20 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <span class="text-xs text-info">💡</span>
                   </div>
                   <div class="flex-1">
-                    <p class="text-sm text-blue-800">{{ currentStepData.help }}</p>
+                    <p class="text-sm text-info-foreground">{{ currentStepData.help }}</p>
                   </div>
                 </div>
               </div>
@@ -97,21 +97,21 @@
         </div>
 
         <!-- Form Preview (on last step) -->
-        <div v-if="currentStep === steps.length - 1 && isFormValid" class="bg-green-50 border border-green-200 rounded-lg p-4">
+        <div v-if="currentStep === steps.length - 1 && isFormValid" class="bg-success-muted border border-success/25 rounded-lg p-4">
           <div class="flex items-start gap-3">
-            <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <CheckCircle class="h-4 w-4 text-green-600" />
+            <div class="w-8 h-8 bg-success/20 rounded-full flex items-center justify-center flex-shrink-0">
+              <CheckCircle class="h-4 w-4 text-success" />
             </div>
             <div class="flex-1">
-              <h4 class="font-medium text-green-800 mb-2">Ready to Create!</h4>
-              <p class="text-sm text-green-700 mb-3">
+              <h4 class="font-medium text-success-foreground mb-2">Ready to Create!</h4>
+              <p class="text-sm text-success-foreground mb-3">
                 Your project configuration is complete. Click "Create Project" to save it.
               </p>
               <details class="text-sm">
-                <summary class="cursor-pointer text-green-700 hover:text-green-800 font-medium">
+                <summary class="cursor-pointer text-success-foreground hover:text-success font-medium">
                   Preview Configuration
                 </summary>
-                <pre class="mt-2 text-xs bg-green-100 p-2 rounded overflow-x-auto">{{ JSON.stringify(generateConfig(), null, 2) }}</pre>
+                <pre class="mt-2 text-xs bg-success/20 p-2 rounded overflow-x-auto">{{ JSON.stringify(generateConfig(), null, 2) }}</pre>
               </details>
             </div>
           </div>

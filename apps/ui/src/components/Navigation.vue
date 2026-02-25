@@ -36,6 +36,16 @@
           </div>
         </div>
         <button
+          @click="themeStore.toggleTheme"
+          class="mb-2 w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+        >
+          <span class="flex items-center gap-2">
+            <component :is="themeStore.isDark ? Moon : Sun" class="h-4 w-4" />
+            Theme
+          </span>
+          <span class="text-xs uppercase tracking-wide">{{ themeStore.resolvedTheme }}</span>
+        </button>
+        <button
           @click="authStore.logout"
           class="w-full flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
         >
@@ -53,11 +63,15 @@ import {
   FolderKanban, 
   Heart,
   Settings,
-  LogOut
+  LogOut,
+  Sun,
+  Moon,
 } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 
 const authStore = useAuthStore()
+const themeStore = useThemeStore()
 
 const navItems = [
   { name: 'Dashboard', path: '/', icon: Home },
