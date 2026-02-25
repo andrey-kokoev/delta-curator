@@ -192,7 +192,6 @@ const apiStore = useApiStore()
 const saving = ref(false)
 
 const form = reactive<ProjectConfig>({
-  version: '1.0.0',
   project_id: '',
   project_name: '',
   topic: {

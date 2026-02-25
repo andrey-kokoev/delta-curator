@@ -39,7 +39,7 @@ Primary runtime: **Cloudflare Workers**
 - `POST /config`
 - `GET /config/:projectId`
 - `POST /config/:projectId/activate`
-- `DELETE /config/:projectId/:version`
+- `DELETE /config/:projectId`
 - `GET /config/active`
 - `POST /seed`
 - `POST /api/auth/admin`

@@ -7,7 +7,6 @@ export interface User {
 }
 
 export interface ProjectConfig {
-  version: string
   project_id: string
   project_name: string
   topic: {
@@ -94,7 +93,6 @@ export interface ScheduleConfig {
 
 export interface ProjectIndex {
   project_id: string
-  version: string
   project_name: string
   is_active: boolean
   r2_key: string

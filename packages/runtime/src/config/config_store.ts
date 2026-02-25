@@ -26,11 +26,12 @@ export interface ConfigStoreOptions {
 export interface ConfigWriteResult {
   success: boolean;
   projectId?: string;
-  version?: string;
   r2Key?: string;
   hash?: string;
   error?: string;
 }
+
+const INTERNAL_CONFIG_REVISION = '1';
 
 /**
  * Config read result
@@ -77,8 +78,8 @@ export class ConfigStore {
   /**
    * Generate R2 key for config object
    */
-  private generateR2Key(projectId: string, version: string): string {
-    return `${this.prefix}${projectId}/${version}.json`;
+  private generateR2Key(projectId: string): string {
+    return `${this.prefix}${projectId}.json`;
   }
 
   /**
@@ -97,14 +98,13 @@ export class ConfigStore {
 
     const validConfig = validation.data!;
     const projectId = validConfig.project_id;
-    const version = validConfig.version;
     const projectName = validConfig.project_name;
     const now = new Date().toISOString();
 
     // Step 2: Prepare content for R2
     const content = canonicalJson(validConfig);
     const hash = this.computeHash(content);
-    const r2Key = this.generateR2Key(projectId, version);
+    const r2Key = this.generateR2Key(projectId);
 
     try {
       // Step 3: Write to R2 first (Phase 1)
@@ -114,7 +114,7 @@ export class ConfigStore {
         },
         customMetadata: {
           'project-id': projectId,
-          'version': version,
+          'version': INTERNAL_CONFIG_REVISION,
           'hash': hash,
         },
       });
@@ -128,7 +128,7 @@ export class ConfigStore {
         )
         .bind(
           projectId,
-          version,
+          INTERNAL_CONFIG_REVISION,
           projectName,
           isActive ? 1 : 0,
           r2Key,
@@ -141,7 +141,6 @@ export class ConfigStore {
       return {
         success: true,
         projectId,
-        version,
         r2Key,
         hash,
       };
@@ -234,75 +233,10 @@ export class ConfigStore {
   }
 
   /**
-   * Read a specific version of a project config
+   * Backward-compatible alias for read()
    */
-  async readVersion(projectId: string, version: string): Promise<ConfigReadResult> {
-    try {
-      const r2Key = this.generateR2Key(projectId, version);
-
-      // Step 1: Get index from D1 with specific version
-      const index = await this.db
-        .prepare('SELECT * FROM project_configs WHERE project_id = ? AND version = ?')
-        .bind(projectId, version)
-        .first<ProjectConfigIndex>();
-
-      if (!index) {
-        return {
-          success: false,
-          error: `Config not found for project: ${projectId}, version: ${version}`,
-        };
-      }
-
-      // Step 2: Read object from R2
-      const obj = await this.bucket.get(r2Key);
-      if (!obj) {
-        return {
-          success: false,
-          error: `Config object not found in R2: ${r2Key}`,
-        };
-      }
-
-      const content = await obj.text();
-
-      // Step 3: Verify hash
-      const computedHash = this.computeHash(content);
-      if (computedHash !== index.hash) {
-        return {
-          success: false,
-          error: `Hash mismatch: stored=${index.hash}, computed=${computedHash}`,
-        };
-      }
-
-      // Step 4: Parse and validate
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(content);
-      } catch {
-        return {
-          success: false,
-          error: 'Failed to parse config JSON',
-        };
-      }
-
-      const validation = validateProjectConfig(parsed);
-      if (!validation.success) {
-        return {
-          success: false,
-          error: `Stored config failed validation: ${validation.errors?.message}`,
-        };
-      }
-
-      return {
-        success: true,
-        config: validation.data,
-        index,
-      };
-    } catch (err) {
-      return {
-        success: false,
-        error: `Failed to read config version: ${err}`,
-      };
-    }
+  async readVersion(projectId: string, _version: string): Promise<ConfigReadResult> {
+    return this.read(projectId);
   }
 
   /**
@@ -353,57 +287,30 @@ export class ConfigStore {
   /**
    * Set a project config as active
    */
-  async setActive(projectId: string, version?: string): Promise<ConfigWriteResult> {
+  async setActive(projectId: string, _version?: string): Promise<ConfigWriteResult> {
     try {
-      if (version) {
-        // Set specific version as active
-        const result = await this.db
-          .prepare(
-            `UPDATE project_configs 
-             SET is_active = CASE 
-               WHEN version = ? THEN 1 
-               ELSE 0 
-             END,
-             updated_at = ?
-             WHERE project_id = ?`
-          )
-          .bind(version, new Date().toISOString(), projectId)
-          .run();
+      const result = await this.db
+        .prepare(
+          `UPDATE project_configs 
+           SET is_active = CASE 
+             WHEN project_id = ? THEN 1 
+             ELSE 0 
+           END,
+           updated_at = ?`
+        )
+        .bind(projectId, new Date().toISOString())
+        .run();
 
-        if (result.meta.changes === 0) {
-          return {
-            success: false,
-            error: `Config not found for project: ${projectId}, version: ${version}`,
-          };
-        }
-      } else {
-        // Set latest version as active
-        const result = await this.db
-          .prepare(
-            `UPDATE project_configs 
-             SET is_active = CASE 
-               WHEN version = (SELECT version FROM project_configs WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1) 
-               THEN 1 
-               ELSE 0 
-             END,
-             updated_at = ?
-             WHERE project_id = ?`
-          )
-          .bind(projectId, new Date().toISOString(), projectId)
-          .run();
-
-        if (result.meta.changes === 0) {
-          return {
-            success: false,
-            error: `Config not found for project: ${projectId}`,
-          };
-        }
+      if (result.meta.changes === 0) {
+        return {
+          success: false,
+          error: `Config not found for project: ${projectId}`,
+        };
       }
 
       return {
         success: true,
         projectId,
-        version,
       };
     } catch (err) {
       return {
@@ -442,16 +349,16 @@ export class ConfigStore {
   }
 
   /**
-   * Delete a project config version
+   * Delete a project config
    */
-  async delete(projectId: string, version: string): Promise<ConfigWriteResult> {
+  async delete(projectId: string, _version?: string): Promise<ConfigWriteResult> {
     try {
-      const r2Key = this.generateR2Key(projectId, version);
+      const r2Key = this.generateR2Key(projectId);
 
       // Delete from D1
       await this.db
-        .prepare('DELETE FROM project_configs WHERE project_id = ? AND version = ?')
-        .bind(projectId, version)
+        .prepare('DELETE FROM project_configs WHERE project_id = ?')
+        .bind(projectId)
         .run();
 
       // Delete from R2
@@ -460,7 +367,6 @@ export class ConfigStore {
       return {
         success: true,
         projectId,
-        version,
       };
     } catch (err) {
       return {

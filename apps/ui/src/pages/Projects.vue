@@ -70,7 +70,6 @@
             </div>
             <p class="text-sm text-muted-foreground">{{ config.project_id }}</p>
             <div class="mt-2 flex items-center gap-4 text-sm text-muted-foreground">
-              <span>v{{ config.version }}</span>
               <span>Updated {{ formatRelativeTime(config.updated_at) }}</span>
             </div>
           </div>

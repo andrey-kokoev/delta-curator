@@ -60,11 +60,7 @@
             View Project
           </RouterLink>
         </div>
-        <div class="grid gap-4 md:grid-cols-3 text-sm">
-          <div>
-            <span class="text-muted-foreground">Version:</span>
-            <span class="ml-2 font-medium">{{ activeConfig.config.version }}</span>
-          </div>
+        <div class="grid gap-4 md:grid-cols-2 text-sm">
           <div>
             <span class="text-muted-foreground">Topic:</span>
             <span class="ml-2 font-medium">{{ activeConfig.config.topic.label }}</span>

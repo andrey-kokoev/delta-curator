@@ -41,11 +41,7 @@
       <p class="text-muted-foreground">Project summary, source status, pipeline, and storage</p>
     </div>
 
-    <div class="grid gap-4 md:grid-cols-4">
-      <div class="rounded-lg border bg-card p-4">
-        <p class="text-sm text-muted-foreground">Version</p>
-        <p class="text-lg font-semibold">{{ project.config.version }}</p>
-      </div>
+    <div class="grid gap-4 md:grid-cols-3">
       <div class="rounded-lg border bg-card p-4">
         <p class="text-sm text-muted-foreground">Sources</p>
         <p class="text-lg font-semibold">{{ project.config.sources.length }}</p>
@@ -246,13 +242,13 @@ async function deleteProject() {
   if (!project.value) return
 
   const confirmed = window.confirm(
-    `Delete project "${project.value.config.project_name}" (v${project.value.index.version})? This cannot be undone.`
+    `Delete project "${project.value.config.project_name}"? This cannot be undone.`
   )
   if (!confirmed) return
 
   try {
     deleting.value = true
-    await apiStore.deleteConfig(project.value.config.project_id, project.value.index.version)
+    await apiStore.deleteConfig(project.value.config.project_id)
     router.push('/projects')
   } catch (err) {
     console.error('Failed to delete project:', err)

@@ -38,7 +38,7 @@ The repository is not worker-only; UI and project-scoped UX are part of the curr
 - `POST /config`
 - `GET /config/:projectId`
 - `POST /config/:projectId/activate`
-- `DELETE /config/:projectId/:version`
+- `DELETE /config/:projectId`
 - `GET /config/active`
 - `POST /seed`
 - `POST /api/auth/admin`

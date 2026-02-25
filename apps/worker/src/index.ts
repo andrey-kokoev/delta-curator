@@ -29,7 +29,6 @@ interface Session {
 interface ConfigWriteResult {
   success: boolean;
   projectId?: string;
-  version?: string;
   r2Key?: string;
   hash?: string;
   error?: string;
@@ -439,8 +438,10 @@ function computeHash(content: string): string {
   return Array.from(content).reduce((a, b) => ((a << 5) - a) + b.charCodeAt(0), 0).toString(16);
 }
 
-function generateR2Key(projectId: string, version: string, prefix = 'configs/'): string {
-  return `${prefix}${projectId}/${version}.json`;
+const INTERNAL_CONFIG_REVISION = '1';
+
+function generateR2Key(projectId: string, prefix = 'configs/'): string {
+  return `${prefix}${projectId}.json`;
 }
 
 function canonicalJson(obj: unknown): string {
@@ -659,13 +660,12 @@ async function writeConfig(
   
   const validConfig = validation.data!;
   const projectId = validConfig.project_id;
-  const version = validConfig.version || '1.0.0';
   const projectName = validConfig.project_name;
   const now = new Date().toISOString();
   
   const content = canonicalJson(validConfig);
   const hash = computeHash(content);
-  const r2Key = generateR2Key(projectId, version);
+  const r2Key = generateR2Key(projectId);
   
   try {
     if (isActive) {
@@ -680,7 +680,7 @@ async function writeConfig(
     // Write to R2 first
     await env.ARTIFACTS.put(r2Key, content, {
       httpMetadata: { contentType: 'application/json' },
-      customMetadata: { 'project-id': projectId, version, hash }
+      customMetadata: { 'project-id': projectId, version: INTERNAL_CONFIG_REVISION, hash }
     });
     
     // Write to D1
@@ -690,7 +690,7 @@ async function writeConfig(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       projectId,
-      version,
+      INTERNAL_CONFIG_REVISION,
       projectName,
       isActive ? 1 : 0,
       r2Key,
@@ -702,7 +702,6 @@ async function writeConfig(
     return {
       success: true,
       projectId,
-      version,
       r2Key,
       hash
     };
@@ -726,32 +725,6 @@ async function readConfig(env: Env, projectId: string): Promise<{ config?: Proje
     const obj = await env.ARTIFACTS.get(index.r2_key);
     if (!obj) {
       return { error: `Config object not found in R2: ${index.r2_key}` };
-    }
-    
-    const content = await obj.text();
-    const parsed = JSON.parse(content) as ProjectConfig;
-    
-    return { config: parsed, index };
-  } catch (err) {
-    return { error: `Failed to read config: ${err}` };
-  }
-}
-
-async function readConfigVersion(env: Env, projectId: string, version: string): Promise<{ config?: ProjectConfig; index?: ProjectConfigIndex; error?: string }> {
-  try {
-    const r2Key = generateR2Key(projectId, version);
-    
-    const index = await env.DB.prepare(
-      'SELECT * FROM project_configs WHERE project_id = ? AND version = ?'
-    ).bind(projectId, version).first<ProjectConfigIndex>();
-    
-    if (!index) {
-      return { error: `Config not found for project: ${projectId}, version: ${version}` };
-    }
-    
-    const obj = await env.ARTIFACTS.get(r2Key);
-    if (!obj) {
-      return { error: `Config object not found in R2: ${r2Key}` };
     }
     
     const content = await obj.text();
@@ -824,32 +797,20 @@ async function listConfigs(env: Env): Promise<{ configs: ProjectConfigIndex[]; e
   }
 }
 
-async function setActiveConfig(env: Env, projectId: string, version?: string): Promise<{ success: boolean; error?: string }> {
+async function setActiveConfig(env: Env, projectId: string): Promise<{ success: boolean; error?: string }> {
   try {
     const now = new Date().toISOString();
 
-    const target = version
-      ? await env.DB.prepare(
-          `SELECT project_id, version
-           FROM project_configs
-           WHERE project_id = ? AND version = ?
-           LIMIT 1`
-        ).bind(projectId, version).first<{ project_id: string; version: string }>()
-      : await env.DB.prepare(
-          `SELECT project_id, version
-           FROM project_configs
-           WHERE project_id = ?
-           ORDER BY updated_at DESC
-           LIMIT 1`
-        ).bind(projectId).first<{ project_id: string; version: string }>();
+    const target = await env.DB.prepare(
+      `SELECT project_id, version
+       FROM project_configs
+       WHERE project_id = ?
+       ORDER BY updated_at DESC
+       LIMIT 1`
+    ).bind(projectId).first<{ project_id: string; version: string }>();
 
     if (!target) {
-      return {
-        success: false,
-        error: version
-          ? `Project/version not found: ${projectId}@${version}`
-          : `Project not found: ${projectId}`
-      };
+      return { success: false, error: `Project not found: ${projectId}` };
     }
 
     await env.DB.prepare(
@@ -890,21 +851,21 @@ async function getActiveConfig(env: Env): Promise<{ config?: ProjectConfig; inde
   }
 }
 
-async function deleteConfig(env: Env, projectId: string, version: string): Promise<{ success: boolean; error?: string }> {
+async function deleteConfig(env: Env, projectId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const r2Key = generateR2Key(projectId, version);
+    const r2Key = generateR2Key(projectId);
 
     const deletingRow = await env.DB.prepare(
-      'SELECT is_active FROM project_configs WHERE project_id = ? AND version = ?'
-    ).bind(projectId, version).first<{ is_active: number }>();
+      'SELECT is_active, version FROM project_configs WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1'
+    ).bind(projectId).first<{ is_active: number; version: string }>();
 
     if (!deletingRow) {
-      return { success: false, error: `Config not found for ${projectId}@${version}` };
+      return { success: false, error: `Config not found for ${projectId}` };
     }
     
     await env.DB.prepare(
-      'DELETE FROM project_configs WHERE project_id = ? AND version = ?'
-    ).bind(projectId, version).run();
+      'DELETE FROM project_configs WHERE project_id = ?'
+    ).bind(projectId).run();
 
     if (deletingRow.is_active === 1) {
       const fallback = await env.DB.prepare(
@@ -942,7 +903,6 @@ async function deleteConfig(env: Env, projectId: string, version: string): Promi
 
 async function seedConfig(env: Env): Promise<{ success: boolean; projectId?: string; error?: string }> {
   const seedConfig: ProjectConfig = {
-    version: '1.0.0',
     project_id: 'quickstart-demo',
     project_name: 'Quickstart Demo Project',
     topic: { id: 'demo-topic-v0', label: 'Example topic for demonstration' },
@@ -1001,12 +961,7 @@ async function handleConfigListRoute(env: Env): Promise<Response> {
 }
 
 async function handleConfigGetRoute(env: Env, request: Request, projectId: string): Promise<Response> {
-  const url = new URL(request.url);
-  const version = url.searchParams.get('version');
-  
-  const result = version 
-    ? await readConfigVersion(env, projectId, version)
-    : await readConfig(env, projectId);
+  const result = await readConfig(env, projectId);
   
   if (result.error) {
     const status = result.error.includes('not found') ? 404 : 500;
@@ -1039,7 +994,6 @@ async function handleConfigWriteRoute(env: Env, request: Request): Promise<Respo
     return new Response(JSON.stringify({
       success: true,
       project_id: result.projectId,
-      version: result.version,
       r2_key: result.r2Key,
       hash: result.hash,
       active: activate
@@ -1055,11 +1009,8 @@ async function handleConfigWriteRoute(env: Env, request: Request): Promise<Respo
   }
 }
 
-async function handleConfigActivateRoute(env: Env, request: Request, projectId: string): Promise<Response> {
-  const url = new URL(request.url);
-  const version = url.searchParams.get('version') || undefined;
-  
-  const result = await setActiveConfig(env, projectId, version);
+async function handleConfigActivateRoute(env: Env, projectId: string): Promise<Response> {
+  const result = await setActiveConfig(env, projectId);
   
   if (!result.success) {
     const status = result.error?.includes('not found') ? 404 : 500;
@@ -1069,13 +1020,13 @@ async function handleConfigActivateRoute(env: Env, request: Request, projectId: 
     });
   }
   
-  return new Response(JSON.stringify({ success: true, project_id: projectId, version }), {
+  return new Response(JSON.stringify({ success: true, project_id: projectId }), {
     headers: { 'Content-Type': 'application/json' }
   });
 }
 
-async function handleConfigDeleteRoute(env: Env, projectId: string, version: string): Promise<Response> {
-  const result = await deleteConfig(env, projectId, version);
+async function handleConfigDeleteRoute(env: Env, projectId: string): Promise<Response> {
+  const result = await deleteConfig(env, projectId);
   
   if (!result.success) {
     return new Response(JSON.stringify({ error: result.error }), { 
@@ -1084,7 +1035,7 @@ async function handleConfigDeleteRoute(env: Env, projectId: string, version: str
     });
   }
   
-  return new Response(JSON.stringify({ success: true, project_id: projectId, version }), {
+  return new Response(JSON.stringify({ success: true, project_id: projectId }), {
     headers: { 'Content-Type': 'application/json' }
   });
 }
@@ -2434,7 +2385,7 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   if (pathname.startsWith('/config/') && pathname.includes('/activate') && method === 'POST') {
     const parts = pathname.split('/').filter(Boolean);
     if (parts.length >= 2) {
-      return handleConfigActivateRoute(env, request, parts[1]);
+      return handleConfigActivateRoute(env, parts[1]);
     }
   }
   
@@ -2447,8 +2398,8 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   
   if (pathname.startsWith('/config/') && method === 'DELETE') {
     const parts = pathname.split('/').filter(Boolean);
-    if (parts.length === 3) {
-      return handleConfigDeleteRoute(env, parts[1], parts[2]);
+    if (parts.length === 2) {
+      return handleConfigDeleteRoute(env, parts[1]);
     }
   }
   

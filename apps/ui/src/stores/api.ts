@@ -60,9 +60,8 @@ export const useApiStore = defineStore('api', () => {
     return fetchApi('/config')
   }
 
-  async function getConfig(projectId: string, version?: string): Promise<{ config: ProjectConfig; index: ProjectIndex }> {
-    const path = version ? `/config/${projectId}?version=${version}` : `/config/${projectId}`
-    return fetchApi(path)
+  async function getConfig(projectId: string): Promise<{ config: ProjectConfig; index: ProjectIndex }> {
+    return fetchApi(`/config/${projectId}`)
   }
 
   async function getActiveConfig(): Promise<{ config: ProjectConfig; index: ProjectIndex }> {
@@ -72,7 +71,6 @@ export const useApiStore = defineStore('api', () => {
   async function saveConfig(config: ProjectConfig, activate = false): Promise<{ 
     success: boolean
     project_id: string
-    version: string
     r2_key: string
     hash: string
     active: boolean
@@ -83,23 +81,18 @@ export const useApiStore = defineStore('api', () => {
     })
   }
 
-  async function activateConfig(projectId: string, version?: string): Promise<{ 
+  async function activateConfig(projectId: string): Promise<{ 
     success: boolean
     project_id: string
-    version?: string
   }> {
-    const path = version 
-      ? `/config/${projectId}/activate?version=${version}` 
-      : `/config/${projectId}/activate`
-    return fetchApi(path, { method: 'POST' })
+    return fetchApi(`/config/${projectId}/activate`, { method: 'POST' })
   }
 
-  async function deleteConfig(projectId: string, version: string): Promise<{ 
+  async function deleteConfig(projectId: string): Promise<{ 
     success: boolean
     project_id: string
-    version: string
   }> {
-    return fetchApi(`/config/${projectId}/${version}`, { method: 'DELETE' })
+    return fetchApi(`/config/${projectId}`, { method: 'DELETE' })
   }
 
   // Operations API
@@ -231,7 +224,6 @@ export const useApiStore = defineStore('api', () => {
   async function seedConfig(activate = true): Promise<{
     success: boolean
     project_id?: string
-    version?: string
     already_exists?: boolean
   }> {
     return fetchApi(`/seed?activate=${activate}`, { method: 'POST' })

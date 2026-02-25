@@ -346,7 +346,6 @@ const generateConfig = (): ProjectConfig => {
 
   // Map form data to actual config structure
   const config: ProjectConfig = {
-    version: "1.0.0",
     project_id: `project-${Date.now()}`,
     project_name: data.description?.slice(0, 50) + "..." || "AI Curation Project",
     topic: {

@@ -40,18 +40,6 @@
           />
         </div>
 
-        <div class="space-y-2">
-          <label class="text-sm font-medium">Version</label>
-          <input
-            v-model="form.version"
-            type="text"
-            required
-            pattern="\d+\.\d+\.\d+"
-            placeholder="1.0.0"
-            class="w-full rounded-lg border bg-background px-3 py-2"
-          />
-          <p class="text-xs text-muted-foreground">Semantic version (x.y.z)</p>
-        </div>
       </div>
 
       <!-- JSON Editor for Advanced Config -->

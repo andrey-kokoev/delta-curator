@@ -117,12 +117,8 @@ export const ScheduleConfigSchema = z.object({
 
 /**
  * Main Project Config Schema
- * Versioned configuration for a delta-curator project
  */
 export const ProjectConfigSchema = z.object({
-  // Schema version for format compatibility
-  version: z.string().regex(/^\d+\.\d+\.\d+$/, 'Must be semver format').default('1.0.0'),
-  
   // Project identification
   project_id: z.string().min(1, 'Project id is required'),
   project_name: z.string().min(1, 'Project name is required'),

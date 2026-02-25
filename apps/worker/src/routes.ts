@@ -120,20 +120,11 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
     }
 
     // GET /config/:project_id — get specific config
-    if (pathname.startsWith('/config/') && method === 'GET' && !pathname.includes('/versions')) {
+    if (pathname.startsWith('/config/') && method === 'GET') {
       const parts = pathname.split('/').filter(Boolean);
       if (parts.length === 2) {
         const projectId = parts[1];
         return await handleConfigRead(request, env, projectId);
-      }
-    }
-
-    // GET /config/:project_id/versions — list versions
-    if (pathname.startsWith('/config/') && pathname.endsWith('/versions') && method === 'GET') {
-      const parts = pathname.split('/').filter(Boolean);
-      if (parts.length === 3 && parts[2] === 'versions') {
-        const projectId = parts[1];
-        return await handleConfigListVersions(request, env, projectId);
       }
     }
 
@@ -146,13 +137,12 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
       }
     }
 
-    // DELETE /config/:project_id/:version — delete config version
+    // DELETE /config/:project_id — delete config
     if (pathname.startsWith('/config/') && method === 'DELETE') {
       const parts = pathname.split('/').filter(Boolean);
-      if (parts.length === 3) {
+      if (parts.length === 2) {
         const projectId = parts[1];
-        const version = parts[2];
-        return await handleConfigDelete(request, env, projectId, version);
+        return await handleConfigDelete(request, env, projectId);
       }
     }
 
@@ -445,14 +435,8 @@ async function handleConfigWrite(request: Request, env: Env): Promise<Response> 
  */
 async function handleConfigRead(request: Request, env: Env, projectId: string): Promise<Response> {
   try {
-    const url = new URL(request.url);
-    const version = url.searchParams.get('version');
-
     const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
-
-    const result = version
-      ? await store.readVersion(projectId, version)
-      : await store.read(projectId);
+    const result = await store.read(projectId);
 
     if (!result.success) {
       const status = result.error?.includes('not found') ? 404 : 500;
@@ -478,44 +462,13 @@ async function handleConfigRead(request: Request, env: Env, projectId: string): 
 }
 
 /**
- * GET /config/:project_id/versions
- * List all versions for a project
- */
-async function handleConfigListVersions(request: Request, env: Env, projectId: string): Promise<Response> {
-  try {
-    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
-    const result = await store.listVersions(projectId);
-
-    if (!result.success) {
-      return new Response(
-        JSON.stringify({ error: result.error }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
-    }
-
-    return new Response(
-      JSON.stringify({ project_id: projectId, versions: result.configs }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: String(err) }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
-}
-
-/**
  * POST /config/:project_id/activate
- * Set a config version as active (or latest if no version specified)
+ * Set project as active
  */
 async function handleConfigActivate(request: Request, env: Env, projectId: string): Promise<Response> {
   try {
-    const url = new URL(request.url);
-    const version = url.searchParams.get('version') || undefined;
-
     const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
-    const result = await store.setActive(projectId, version);
+    const result = await store.setActive(projectId);
 
     if (!result.success) {
       const status = result.error?.includes('not found') ? 404 : 500;
@@ -528,8 +481,7 @@ async function handleConfigActivate(request: Request, env: Env, projectId: strin
     return new Response(
       JSON.stringify({
         success: true,
-        project_id: result.projectId,
-        version: result.version
+        project_id: result.projectId
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
@@ -574,13 +526,13 @@ async function handleConfigGetActive(request: Request, env: Env): Promise<Respon
 }
 
 /**
- * DELETE /config/:project_id/:version
- * Delete a specific config version
+ * DELETE /config/:project_id
+ * Delete a project config
  */
-async function handleConfigDelete(request: Request, env: Env, projectId: string, version: string): Promise<Response> {
+async function handleConfigDelete(request: Request, env: Env, projectId: string): Promise<Response> {
   try {
     const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
-    const result = await store.delete(projectId, version);
+    const result = await store.delete(projectId);
 
     if (!result.success) {
       return new Response(
@@ -593,7 +545,6 @@ async function handleConfigDelete(request: Request, env: Env, projectId: string,
       JSON.stringify({
         success: true,
         project_id: projectId,
-        version: version,
         deleted: true
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }

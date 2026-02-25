@@ -4,17 +4,11 @@
   "title": "Delta-Curator Config",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "topic", "sources", "pipeline", "storage"],
+  "required": ["topic", "sources", "pipeline", "storage"],
   "properties": {
     "$schema": {
       "type": "string"
     },
-    "version": {
-      "type": "string",
-      "description": "Config format version (semver).",
-      "pattern": "^\\d+\\.\\d+\\.\\d+$"
-    },
-
     "topic": {
       "type": "object",
       "additionalProperties": false,

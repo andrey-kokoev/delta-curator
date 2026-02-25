@@ -9,7 +9,6 @@ import type { ProjectConfig } from '@delta-curator/protocol';
 
 // Default seed config - loaded from examples/quickstart/config.json
 const DEFAULT_SEED_CONFIG: ProjectConfig = {
-  version: '1.0.0',
   project_id: 'quickstart-demo',
   project_name: 'Quickstart Demo Project',
   topic: {
@@ -145,7 +144,6 @@ export interface SeedOptions {
 export interface SeedResult {
   success: boolean;
   projectId?: string;
-  version?: string;
   r2Key?: string;
   hash?: string;
   alreadyExists?: boolean;
@@ -172,12 +170,11 @@ export async function seedConfig(options: SeedOptions): Promise<SeedResult> {
         return {
           success: true,
           alreadyExists: true,
-          projectId: config.project_id,
-          version: config.version
+          projectId: config.project_id
         };
       }
 
-      // Config exists but different - create new version
+      // Config exists but different - overwrite
       const result = await store.write(config, activate);
 
       if (!result.success) {
@@ -190,7 +187,6 @@ export async function seedConfig(options: SeedOptions): Promise<SeedResult> {
       return {
         success: true,
         projectId: result.projectId,
-        version: result.version,
         r2Key: result.r2Key,
         hash: result.hash,
         alreadyExists: false
@@ -210,7 +206,6 @@ export async function seedConfig(options: SeedOptions): Promise<SeedResult> {
     return {
       success: true,
       projectId: result.projectId,
-      version: result.version,
       r2Key: result.r2Key,
       hash: result.hash,
       alreadyExists: false
@@ -273,7 +268,6 @@ export async function handleSeed(request: Request, db: D1Database, bucket: R2Buc
       JSON.stringify({
         success: true,
         project_id: result.projectId,
-        version: result.version,
         r2_key: result.r2Key,
         hash: result.hash,
         already_exists: result.alreadyExists,
