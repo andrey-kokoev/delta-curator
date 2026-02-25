@@ -65,6 +65,7 @@
             <button
               type="button"
               @click="removeSource(index)"
+              :disabled="form.sources.length <= 1"
               class="text-sm text-destructive hover:underline"
             >
               Remove
@@ -93,14 +94,16 @@
             </select>
           </div>
 
-          <div class="space-y-2">
-            <label class="text-sm">Feed URL / Config</label>
+          <div v-if="isRssSource(source.plugin)" class="space-y-2">
+            <label class="text-sm">Feed URL</label>
             <input
               v-model="source.config.feed_url"
               type="url"
               placeholder="https://example.com/feed.xml"
+              required
               class="w-full rounded-lg border bg-background px-3 py-2"
             />
+            <p class="text-xs text-muted-foreground">Required for RSS sources</p>
           </div>
         </div>
       </div>
@@ -191,6 +194,20 @@ const apiStore = useApiStore()
 
 const saving = ref(false)
 
+function createDefaultSource() {
+  return {
+    id: '',
+    plugin: 'rss_source',
+    config: {
+      feed_url: ''
+    }
+  }
+}
+
+function isRssSource(plugin: string) {
+  return plugin === 'rss_source'
+}
+
 const form = reactive<ProjectConfig>({
   project_id: '',
   project_name: '',
@@ -199,11 +216,7 @@ const form = reactive<ProjectConfig>({
     label: ''
   },
   sources: [
-    {
-      id: '',
-      plugin: 'rss_source',
-      config: {}
-    }
+    createDefaultSource()
   ],
   pipeline: {
     normalizer: { plugin: 'text_normalizer', config: {} },
@@ -239,20 +252,36 @@ const form = reactive<ProjectConfig>({
 })
 
 function addSource() {
-  form.sources.push({
-    id: '',
-    plugin: 'rss_source',
-    config: {}
-  })
+  form.sources.push(createDefaultSource())
 }
 
 function removeSource(index: number) {
+  if (form.sources.length <= 1) return
   form.sources.splice(index, 1)
 }
 
 async function createProject() {
   try {
     saving.value = true
+
+    if (!form.sources.length) {
+      throw new Error('Add at least one source to create a project.')
+    }
+
+    for (const source of form.sources) {
+      if (!source.id?.trim()) {
+        throw new Error('Each source must include a Source ID.')
+      }
+
+      if (isRssSource(source.plugin)) {
+        const feedUrl = String(source.config.feed_url ?? '').trim()
+        if (!feedUrl) {
+          throw new Error('RSS sources require a Feed URL.')
+        }
+        source.config.feed_url = feedUrl
+      }
+    }
+
     form.topic.id = `${form.project_id}-topic`
     await apiStore.saveConfig(form, true)
     router.push('/projects')

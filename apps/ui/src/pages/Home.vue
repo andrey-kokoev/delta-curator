@@ -80,13 +80,13 @@
       </div>
       <div class="p-6 grid gap-4 md:grid-cols-3">
         <RouterLink
-          to="/projects/new"
+          to="/projects"
           class="flex items-center gap-3 rounded-lg border p-4 hover:bg-accent transition-colors"
         >
           <Plus class="h-5 w-5" />
           <div>
             <p class="font-medium">New Project</p>
-            <p class="text-sm text-muted-foreground">Create a new curation project</p>
+            <p class="text-sm text-muted-foreground">Create a new curation project with AI</p>
           </div>
         </RouterLink>
         

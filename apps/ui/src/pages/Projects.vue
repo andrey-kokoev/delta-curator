@@ -5,16 +5,13 @@
         <h1 class="text-3xl font-bold tracking-tight">Projects</h1>
         <p class="text-muted-foreground">Manage your curation projects</p>
       </div>
-      <SplitButton @primary="openAIDialog = true" @secondary="goToManualCreate">
-        <template #primary-icon>
-          <Sparkles class="h-4 w-4" />
-        </template>
-        <template #primary-text>New Project</template>
-        <template #secondary-icon>
-          <Plus class="h-4 w-4" />
-        </template>
-        <template #secondary-text>Manual Setup</template>
-      </SplitButton>
+      <button
+        @click="openAIDialog = true"
+        class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+      >
+        <Sparkles class="h-4 w-4" />
+        New Project
+      </button>
     </div>
 
     <!-- AI Create Dialog -->
@@ -40,16 +37,13 @@
         >
           {{ seeding ? 'Seeding...' : 'Seed Demo Project' }}
         </button>
-        <SplitButton @primary="openAIDialog = true" @secondary="goToManualCreate">
-          <template #primary-icon>
-            <Sparkles class="h-4 w-4" />
-          </template>
-          <template #primary-text>Create Project</template>
-          <template #secondary-icon>
-            <Plus class="h-4 w-4" />
-          </template>
-          <template #secondary-text>Manual Setup</template>
-        </SplitButton>
+        <button
+          @click="openAIDialog = true"
+          class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          <Sparkles class="h-4 w-4" />
+          Create Project
+        </button>
       </div>
     </div>
 
@@ -81,16 +75,13 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { FolderKanban, Plus, Sparkles } from 'lucide-vue-next'
+import { FolderKanban, Sparkles } from 'lucide-vue-next'
 import { useApiStore } from '@/stores/api'
-import SplitButton from '@/components/SplitButton.vue'
 import AICreateProjectDialog from '@/components/AICreateProjectDialog.vue'
 import type { ProjectIndex } from '@/types'
 import type { ProjectConfig } from '@delta-curator/protocol'
 import { formatRelativeTime } from '@/lib/utils'
 
-const router = useRouter()
 const apiStore = useApiStore()
 
 const configs = ref<ProjectIndex[]>([])
@@ -120,10 +111,6 @@ async function seedProject() {
   } finally {
     seeding.value = false
   }
-}
-
-function goToManualCreate() {
-  router.push('/projects/new')
 }
 
 async function handleProjectCreated(config: ProjectConfig) {

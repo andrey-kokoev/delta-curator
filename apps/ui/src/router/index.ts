@@ -23,12 +23,6 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
-      path: '/projects/new',
-      name: 'project-new',
-      component: () => import('@/pages/ProjectWizard.vue'),
-      meta: { requiresAuth: true }
-    },
-    {
       path: '/projects/:id',
       name: 'project-detail',
       component: () => import('@/pages/ProjectDetail.vue'),

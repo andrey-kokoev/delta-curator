@@ -13,16 +13,13 @@
         <p class="text-muted-foreground">Manage data sources</p>
       </div>
       <div class="flex items-center gap-2">
-        <SplitButton @primary="openSourceDialog = true" @secondary="addManualSource">
-          <template #primary-icon>
-            <Sparkles class="h-4 w-4" />
-          </template>
-          <template #primary-text>New Source</template>
-          <template #secondary-icon>
-            <Plus class="h-4 w-4" />
-          </template>
-          <template #secondary-text>Create Manually</template>
-        </SplitButton>
+        <button
+          @click="openSourceDialog = true"
+          class="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          <Sparkles class="h-4 w-4" />
+          New Source
+        </button>
       </div>
     </div>
 
@@ -155,10 +152,9 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Plus, Sparkles } from 'lucide-vue-next'
+import { Sparkles } from 'lucide-vue-next'
 import { useApiStore } from '@/stores/api'
 import ProjectSubnav from '@/components/ProjectSubnav.vue'
-import SplitButton from '@/components/SplitButton.vue'
 import AICreateSourceDialog from '@/components/AICreateSourceDialog.vue'
 import { formatRelativeTime } from '@/lib/utils'
 import type { ProjectConfig, SourceConfig, InspectResult, InspectSourceCursor, SourceRunSummary } from '@/types'
@@ -354,16 +350,6 @@ async function clearCursor(sourceId: string) {
   } finally {
     updatingSourceId.value = null
   }
-}
-
-function addManualSource() {
-  sources.value.push({
-    id: '',
-    plugin: 'rss_source',
-    enabled: true,
-    config: {}
-  })
-  sourceConfigJson.value.push('{}')
 }
 
 function addGuidedSource(source: SourceConfig) {
