@@ -49,7 +49,7 @@ const router = createRouter({
     {
       path: '/projects/:id/pipeline',
       name: 'project-pipeline',
-      component: () => import('@/pages/ProjectPipeline.vue'),
+      redirect: to => `/projects/${to.params.id}`,
       meta: { requiresAuth: true }
     },
     {

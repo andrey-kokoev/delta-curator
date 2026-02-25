@@ -31,7 +31,6 @@ const route = useRoute()
 const items = computed(() => [
   { label: 'Overview', path: `/projects/${props.projectId}` },
   { label: 'Sources', path: `/projects/${props.projectId}/sources` },
-  { label: 'Pipeline', path: `/projects/${props.projectId}/pipeline` },
   { label: 'Content', path: `/projects/${props.projectId}/content` },
   { label: 'Search', path: `/projects/${props.projectId}/search` },
   { label: 'Run', path: `/projects/${props.projectId}/run` },
