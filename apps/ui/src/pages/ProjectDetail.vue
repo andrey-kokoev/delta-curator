@@ -13,9 +13,25 @@
     <div class="flex items-start justify-between">
       <div>
         <div class="flex items-center gap-3">
-          <h1 class="text-3xl font-bold tracking-tight">{{ project.config.project_name }}</h1>
+          <input
+            v-model="editableProjectName"
+            type="text"
+            class="text-3xl font-bold tracking-tight bg-transparent border-0 border-b border-transparent px-0 focus:border-border focus:outline-none"
+            @blur="saveInlineEdits"
+            @keydown.enter.prevent="saveInlineEdits"
+          />
         </div>
         <p class="text-muted-foreground">{{ project.config.project_id }}</p>
+        <div class="mt-3">
+          <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monitoring Focus (used for AI unless explicit ranking query)</p>
+          <input
+            v-model="editableTopicLabel"
+            type="text"
+            class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-base font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            @blur="saveInlineEdits"
+            @keydown.enter.prevent="saveInlineEdits"
+          />
+        </div>
       </div>
       <div class="flex items-center gap-2">
         <button
@@ -25,12 +41,6 @@
         >
           {{ deleting ? 'Deleting...' : 'Delete' }}
         </button>
-        <RouterLink
-          :to="`/projects/${project.config.project_id}/edit`"
-          class="rounded-lg bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
-        >
-          Edit
-        </RouterLink>
       </div>
     </div>
 
@@ -38,53 +48,11 @@
 
     <div>
       <h2 class="text-2xl font-semibold tracking-tight">Overview</h2>
-      <p class="text-muted-foreground">Project summary, source status, pipeline, and storage</p>
-    </div>
-
-    <div class="grid gap-4 md:grid-cols-3">
-      <div class="rounded-lg border bg-card p-4">
-        <p class="text-sm text-muted-foreground">Sources</p>
-        <p class="text-lg font-semibold">{{ project.config.sources.length }}</p>
-      </div>
-      <div class="rounded-lg border bg-card p-4">
-        <p class="text-sm text-muted-foreground">Enabled Sources</p>
-        <p class="text-lg font-semibold">{{ project.config.sources.filter((source) => source.enabled !== false).length }}</p>
-      </div>
-      <div class="rounded-lg border bg-card p-4">
-        <p class="text-sm text-muted-foreground">Topic</p>
-        <p class="text-lg font-semibold truncate">{{ project.config.topic.label }}</p>
-      </div>
-    </div>
-
-    <!-- Operations -->
-    <div class="rounded-lg border bg-card p-4">
-      <h2 class="text-lg font-semibold mb-4">Operations</h2>
-      <div class="flex flex-wrap gap-2">
-        <RouterLink
-          :to="`/projects/${project.config.project_id}/content`"
-          class="rounded-lg border px-4 py-2 hover:bg-accent"
-        >
-          Content
-        </RouterLink>
-        <RouterLink
-          :to="`/projects/${project.config.project_id}/search`"
-          class="rounded-lg border px-4 py-2 hover:bg-accent"
-        >
-          Search
-        </RouterLink>
-        <RouterLink
-          :to="`/projects/${project.config.project_id}/run`"
-          class="rounded-lg border px-4 py-2 hover:bg-accent"
-        >
-          Run Batch
-        </RouterLink>
-        <RouterLink
-          :to="`/projects/${project.config.project_id}/inspect`"
-          class="rounded-lg border px-4 py-2 hover:bg-accent"
-        >
-          Inspect
-        </RouterLink>
-      </div>
+      <p class="text-muted-foreground">
+        Project summary, source status, and storage
+        <span v-if="inlineSaving" class="ml-2 text-sm">• Saving...</span>
+        <span v-else-if="inlineSaveError" class="ml-2 text-sm text-destructive">• {{ inlineSaveError }}</span>
+      </p>
     </div>
 
     <!-- Sources -->
@@ -126,39 +94,6 @@
       </div>
     </div>
 
-    <!-- Pipeline -->
-    <div class="rounded-lg border bg-card">
-      <div class="border-b p-4">
-        <h2 class="text-lg font-semibold">Pipeline</h2>
-      </div>
-      <div class="p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div class="text-center p-3 rounded-lg bg-muted">
-          <p class="text-xs text-muted-foreground">Normalizer</p>
-          <p class="font-medium">{{ project.config.pipeline.normalizer.plugin }}</p>
-        </div>
-        <div class="text-center p-3 rounded-lg bg-muted">
-          <p class="text-xs text-muted-foreground">Extractor</p>
-          <p class="font-medium">{{ project.config.pipeline.extractor.plugin }}</p>
-        </div>
-        <div class="text-center p-3 rounded-lg bg-muted">
-          <p class="text-xs text-muted-foreground">Comparator</p>
-          <p class="font-medium">{{ project.config.pipeline.comparator.plugin }}</p>
-        </div>
-        <div class="text-center p-3 rounded-lg bg-muted">
-          <p class="text-xs text-muted-foreground">Decider</p>
-          <p class="font-medium">{{ project.config.pipeline.decider.plugin }}</p>
-        </div>
-        <div class="text-center p-3 rounded-lg bg-muted">
-          <p class="text-xs text-muted-foreground">Resolver</p>
-          <p class="font-medium">{{ project.config.pipeline.resolver.plugin }}</p>
-        </div>
-        <div class="text-center p-3 rounded-lg bg-muted">
-          <p class="text-xs text-muted-foreground">Merger</p>
-          <p class="font-medium">{{ project.config.pipeline.merger.plugin }}</p>
-        </div>
-      </div>
-    </div>
-
     <!-- Storage -->
     <div class="rounded-lg border bg-card p-4">
       <h2 class="text-lg font-semibold mb-4">Storage Configuration</h2>
@@ -178,7 +113,16 @@
 
     <!-- Raw Config -->
     <details class="rounded-lg border bg-card">
-      <summary class="cursor-pointer select-none border-b p-4 text-lg font-semibold">Raw Configuration</summary>
+      <summary class="relative cursor-pointer select-none border-b p-4 pr-24 text-lg font-semibold">
+        <span class="inline-block">Raw Configuration</span>
+        <button
+          type="button"
+          class="absolute right-4 top-1/2 -translate-y-1/2 rounded-md border px-2 py-1 text-xs font-medium hover:bg-accent"
+          @click.stop.prevent="copyRawConfig"
+        >
+          {{ rawCopied ? 'Copied' : 'Copy' }}
+        </button>
+      </summary>
       <div class="p-4">
         <pre class="text-xs bg-muted p-4 rounded-lg overflow-auto max-h-96">{{ JSON.stringify(project.config, null, 2) }}</pre>
       </div>
@@ -202,6 +146,11 @@ const project = ref<{ config: ProjectConfig; index: ProjectIndex } | null>(null)
 const loading = ref(true)
 const deleting = ref(false)
 const sourceCursors = ref<Record<string, InspectSourceCursor>>({})
+const editableProjectName = ref('')
+const editableTopicLabel = ref('')
+const inlineSaving = ref(false)
+const inlineSaveError = ref<string | null>(null)
+const rawCopied = ref(false)
 
 function formatUtcMinute(value: string | null | undefined): string {
   if (!value) return 'not set'
@@ -230,11 +179,62 @@ async function loadProject() {
   try {
     loading.value = true
     project.value = await apiStore.getConfig(projectId)
+    editableProjectName.value = project.value.config.project_name
+    editableTopicLabel.value = project.value.config.topic.label
     await loadSourceCursors()
   } catch (err) {
     console.error('Failed to load project:', err)
   } finally {
     loading.value = false
+  }
+}
+
+async function saveInlineEdits() {
+  if (!project.value) return
+
+  const trimmedName = editableProjectName.value.trim()
+  const trimmedTopic = editableTopicLabel.value.trim()
+
+  if (!trimmedName || !trimmedTopic) {
+    inlineSaveError.value = 'Project name and topic cannot be empty.'
+    editableProjectName.value = project.value.config.project_name
+    editableTopicLabel.value = project.value.config.topic.label
+    return
+  }
+
+  if (
+    trimmedName === project.value.config.project_name &&
+    trimmedTopic === project.value.config.topic.label
+  ) {
+    inlineSaveError.value = null
+    return
+  }
+
+  inlineSaving.value = true
+  inlineSaveError.value = null
+
+  const previousName = project.value.config.project_name
+  const previousTopic = project.value.config.topic.label
+
+  try {
+    const updatedConfig: ProjectConfig = {
+      ...project.value.config,
+      project_name: trimmedName,
+      topic: {
+        ...project.value.config.topic,
+        label: trimmedTopic
+      }
+    }
+
+    await apiStore.saveConfig(updatedConfig, false)
+    project.value.config = updatedConfig
+  } catch (err) {
+    editableProjectName.value = previousName
+    editableTopicLabel.value = previousTopic
+    inlineSaveError.value = 'Failed to save changes.'
+    console.error('Failed to save inline edits:', err)
+  } finally {
+    inlineSaving.value = false
   }
 }
 
@@ -255,6 +255,20 @@ async function deleteProject() {
     alert('Failed to delete project: ' + (err as Error).message)
   } finally {
     deleting.value = false
+  }
+}
+
+async function copyRawConfig() {
+  if (!project.value) return
+
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(project.value.config, null, 2))
+    rawCopied.value = true
+    setTimeout(() => {
+      rawCopied.value = false
+    }, 1500)
+  } catch (err) {
+    console.error('Failed to copy raw config:', err)
   }
 }
 
