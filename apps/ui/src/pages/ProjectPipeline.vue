@@ -7,11 +7,6 @@
 
     <ProjectSubnav :project-id="projectId" />
 
-    <div>
-      <h2 class="text-2xl font-semibold tracking-tight">Pipeline</h2>
-      <p class="text-muted-foreground">Configure processing pipeline</p>
-    </div>
-
     <div v-if="loading" class="text-center py-12">
       <p class="text-muted-foreground">Loading...</p>
     </div>

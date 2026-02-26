@@ -7,11 +7,6 @@
 
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
 
-    <div>
-      <h2 class="text-2xl font-semibold tracking-tight">Inspect</h2>
-      <p class="text-muted-foreground">View system digest and logs</p>
-    </div>
-
     <!-- Controls -->
     <div class="flex items-center gap-4">
       <div class="space-y-1">

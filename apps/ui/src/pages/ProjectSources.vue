@@ -7,11 +7,7 @@
 
     <ProjectSubnav :project-id="projectId" />
 
-    <div class="flex items-center justify-between">
-      <div>
-        <h2 class="text-2xl font-semibold tracking-tight">Sources</h2>
-        <p class="text-muted-foreground">Manage data sources</p>
-      </div>
+    <div class="flex items-center justify-end">
       <div class="flex items-center gap-2">
         <button
           @click="openSourceDialog = true"
@@ -130,6 +126,24 @@
             </button>
           </div>
 
+          <div v-if="lastRunBySource[source.id]" class="rounded border bg-muted/40 p-2 text-xs space-y-1">
+            <p class="font-medium">Last Run Details</p>
+            <p v-if="lastRunBySource[source.id]?.rerank_query" class="text-muted-foreground truncate">
+              reranker query: {{ lastRunBySource[source.id]?.rerank_query }}
+            </p>
+            <ul v-if="(lastRunBySource[source.id]?.processed_items || []).length" class="max-h-40 overflow-auto space-y-1">
+              <li
+                v-for="item in (lastRunBySource[source.id]?.processed_items || [])"
+                :key="item.source_item_id"
+                class="rounded bg-background px-2 py-1"
+              >
+                <p class="truncate">{{ item.title || item.source_item_id }}</p>
+                <p class="truncate text-muted-foreground">{{ item.url || item.source_item_id }}</p>
+                <p class="truncate text-muted-foreground">{{ item.outcome || 'pending' }}</p>
+              </li>
+            </ul>
+          </div>
+
           <div v-if="(sourceRuns[source.id] || []).length === 0" class="text-xs text-muted-foreground">
             No runs yet.
           </div>
@@ -139,7 +153,7 @@
               :key="run.commit_id"
               class="rounded bg-muted/60 px-2 py-1"
             >
-              {{ formatRunTime(run.run_at) }} · items {{ run.item_count ?? 'n/a' }} · events {{ run.event_count ?? 'n/a' }}
+              {{ formatRunTime(run.run_at) }} · items {{ formatRunMetric(run.item_count, 'items') }} · events {{ formatRunMetric(run.event_count, 'events') }}
             </li>
           </ul>
         </div>
@@ -157,7 +171,7 @@ import { useApiStore } from '@/stores/api'
 import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import AICreateSourceDialog from '@/components/AICreateSourceDialog.vue'
 import { formatRelativeTime } from '@/lib/utils'
-import type { ProjectConfig, SourceConfig, InspectResult, InspectSourceCursor, SourceRunSummary } from '@/types'
+import type { ProjectConfig, SourceConfig, InspectResult, InspectSourceCursor, SourceRunSummary, RunResult } from '@/types'
 
 const route = useRoute()
 const apiStore = useApiStore()
@@ -173,6 +187,7 @@ const lastSavedSnapshot = ref('[]')
 const hasLoadedInitialState = ref(false)
 const sourceCursors = ref<Record<string, InspectSourceCursor>>({})
 const sourceRuns = ref<Record<string, SourceRunSummary[]>>({})
+const lastRunBySource = ref<Record<string, RunResult>>({})
 const cursorInputs = ref<Record<string, string>>({})
 const updatingSourceId = ref<string | null>(null)
 const runningSourceId = ref<string | null>(null)
@@ -244,6 +259,14 @@ function formatRunTime(value: string | null): string {
   return `${formatRelativeTime(date)} (${date.toISOString().slice(0, 16)}Z)`
 }
 
+function formatRunMetric(value: number | null, kind: 'items' | 'events'): string {
+  if (value === null || value === undefined) return 'n/a'
+  if (value === 0) {
+    return kind === 'items' ? '0 (no items fetched)' : '0 (no accepted events)'
+  }
+  return String(value)
+}
+
 function stableStringify(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(stableStringify).join(',')}]`
@@ -309,6 +332,7 @@ async function runSourceNow(sourceId: string) {
   try {
     runningSourceId.value = sourceId
     const result = await apiStore.runBatch(sourceId, 50, projectId)
+    lastRunBySource.value[sourceId] = result
     await loadSourceCursors()
     await loadSourceRuns()
     alert(`Run completed for ${sourceId}: ${result.items_processed} items, ${result.events_written} events`)

@@ -2162,21 +2162,19 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       });
 
       // Update source state even if no new events
-      let cursorCommitId: string | null = null;
-      if (sourceStateColumns.has('last_commit_id') && sourceStateColumns.has('last_commit_key')) {
-        const cursorCommit = await ensureCursorCommit(
-          env,
-          commitColumns,
-          config.project_id,
-          sourceConfig.id,
-          traceId,
-          sourceState,
-          batchResult.newState,
-          now,
-          items.map((item) => item.source_item_id)
-        );
-        cursorCommitId = cursorCommit.commitId;
+      const cursorCommit = await ensureCursorCommit(
+        env,
+        commitColumns,
+        config.project_id,
+        sourceConfig.id,
+        traceId,
+        sourceState,
+        batchResult.newState,
+        now,
+        items.map((item) => item.source_item_id)
+      );
 
+      if (sourceStateColumns.has('last_commit_id') && sourceStateColumns.has('last_commit_key')) {
         await upsertSourceState(
           env,
           sourceStateColumns,
@@ -2196,7 +2194,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       }
       
       return new Response(JSON.stringify({ 
-        commit_id: cursorCommitId,
+        commit_id: cursorCommit.commitId,
         trace_id: traceId,
         items_processed: items.length,
         events_written: 0,
@@ -3000,8 +2998,12 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
       : commitColumns.has('created_at')
         ? 'c.created_at'
         : 'NULL';
-    const itemCountExpression = commitColumns.has('item_count') ? 'c.item_count' : 'NULL';
-    const eventCountExpression = commitColumns.has('event_count') ? 'c.event_count' : 'NULL';
+    const eventCountExpression = commitColumns.has('event_count')
+      ? 'c.event_count'
+      : '(SELECT COUNT(1) FROM events e WHERE e.commit_id = c.commit_id)';
+    const itemCountExpression = commitColumns.has('item_count')
+      ? 'c.item_count'
+      : eventCountExpression;
     const projectFilterClause = commitColumns.has('project_id')
       ? 'AND c.project_id = ?'
       : '';

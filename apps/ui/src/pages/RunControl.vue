@@ -7,11 +7,6 @@
 
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
 
-    <div>
-      <h2 class="text-2xl font-semibold tracking-tight">Run Batch</h2>
-      <p class="text-muted-foreground">Process new items from sources</p>
-    </div>
-
     <div v-if="!activeProject" class="rounded-lg border border-destructive bg-destructive/10 p-6">
       <p class="text-destructive">No project configured</p>
       <RouterLink to="/projects" class="text-primary hover:underline">Select a project</RouterLink>

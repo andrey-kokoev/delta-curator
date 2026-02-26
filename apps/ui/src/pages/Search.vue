@@ -7,11 +7,6 @@
 
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
 
-    <div>
-      <h2 class="text-2xl font-semibold tracking-tight">Search</h2>
-      <p class="text-muted-foreground">Query curated content</p>
-    </div>
-
     <!-- Search Form -->
     <div class="rounded-lg border bg-card p-6 space-y-4">
       <div class="flex gap-4">

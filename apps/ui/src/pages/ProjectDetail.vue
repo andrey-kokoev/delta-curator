@@ -34,26 +34,22 @@
           </button>
         </div>
       </div>
-      <div class="border rounded-md bg-muted p-4 w-full">
-        <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Novelty Criteria</p>
-        <input
-          v-model="editableNoveltyCriteria"
-          type="text"
-          class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-base font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          @blur="saveInlineEdits"
-          @keydown.enter.prevent="saveInlineEdits"
-        />
-      </div>
     </div>
 
     <ProjectSubnav :project-id="projectId" />
 
-    <div>
-      <h2 class="text-2xl font-semibold tracking-tight">Overview</h2>
-      <p class="text-muted-foreground">
-        Project summary, source status, and storage
-        <span v-if="inlineSaving" class="ml-2 text-sm">• Saving...</span>
-        <span v-else-if="inlineSaveError" class="ml-2 text-sm text-destructive">• {{ inlineSaveError }}</span>
+    <div class="border rounded-md bg-muted p-4 w-full">
+      <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Novelty Criteria</p>
+      <input
+        v-model="editableNoveltyCriteria"
+        type="text"
+        class="mt-1 w-full rounded-md border bg-background px-3 py-2 text-base font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        @blur="saveInlineEdits"
+        @keydown.enter.prevent="saveInlineEdits"
+      />
+      <p class="text-xs text-muted-foreground mt-2">
+        <span v-if="inlineSaving">Saving...</span>
+        <span v-else-if="inlineSaveError" class="text-destructive">{{ inlineSaveError }}</span>
       </p>
     </div>
 
