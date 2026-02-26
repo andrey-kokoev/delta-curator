@@ -168,6 +168,11 @@ export interface SourceRunSummary {
   run_at: string | null
   rerank_query?: string | null
   processed_items?: any[]
+  status?: 'ok' | 'failed' | 'unknown'
+}
+
+export interface MergedRun extends SourceRunSummary {
+  source_id: string
 }
 
 export interface SourceRunsResult {

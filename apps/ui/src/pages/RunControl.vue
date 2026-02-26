@@ -143,8 +143,8 @@
             <div class="flex items-start justify-between gap-2">
               <div class="min-w-0">
                 <p class="truncate font-medium">{{ item.title || item.source_item_id }}</p>
-                <p class="truncate text-xs text-muted-foreground">{{ item.source_item_id }}</p>
-                <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="truncate text-xs text-blue-600 hover:underline">{{ item.url }}</a>
+                <p v-if="item.source_item_id" class="truncate text-xs text-muted-foreground" v-html="formatRerankInput(item.source_item_id)"></p>
+                <a v-if="item.url && !item.source_item_id?.startsWith('link:')" :href="item.url" target="_blank" rel="noopener" class="truncate text-xs text-blue-600 hover:underline">{{ item.url }}</a>
                 <p v-if="item.decision_reason" class="truncate text-xs text-muted-foreground">{{ item.decision_reason }}</p>
                 <p v-else-if="item.rank_score !== null && item.rank_score !== undefined" class="truncate text-xs text-muted-foreground">
                   rank {{ Number(item.rank_score).toFixed(3) }}
@@ -179,11 +179,15 @@ function formatRerankInput(input: string): string {
   return input
     .split('\n')
     .map(line => {
+      if (line.includes('<a ') || line.includes('</a>')) {
+        return line
+      }
       if (line.startsWith('link:')) {
         const url = line.slice(5).trim()
         if (url.startsWith('http')) {
           return `<a href="${url}" target="_blank" rel="noopener" class="text-blue-600 hover:underline">${url}</a>`
         }
+        return line
       }
       return line.replace(/(https?:\/\/[^\s<>"]+)/g, '<a href="$1" target="_blank" rel="noopener" class="text-blue-600 hover:underline">$1</a>')
     })

@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --remote",
     "prebuild": "rm -rf public && mkdir -p public && cp -r ../ui/dist/* public/",
     "build": "tsc",
     "predeploy": "pnpm run prebuild",
