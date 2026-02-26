@@ -36,7 +36,9 @@
       </div>
     </div>
 
+    <div class="flex flex-col md:flex-row gap-6 items-start w-full pb-6">
     <ProjectSubnav :project-id="projectId" />
+    <div class="flex-1 min-w-0 space-y-6 w-full">
 
     <div class="border rounded-md bg-muted p-4 w-full">
       <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Novelty Criteria</p>
@@ -108,24 +110,9 @@
         </div>
       </div>
     </div>
-
-    <!-- Raw Config -->
-    <details class="rounded-lg border bg-card">
-      <summary class="relative cursor-pointer select-none border-b p-4 pr-24 text-lg font-semibold">
-        <span class="inline-block">Raw Configuration</span>
-        <button
-          type="button"
-          class="absolute right-4 top-1/2 -translate-y-1/2 rounded-md border px-2 py-1 text-xs font-medium hover:bg-accent"
-          @click.stop.prevent="copyRawConfig"
-        >
-          {{ rawCopied ? 'Copied' : 'Copy' }}
-        </button>
-      </summary>
-      <div class="p-4">
-        <pre class="text-xs bg-muted p-4 rounded-lg overflow-auto max-h-96">{{ JSON.stringify(project.config, null, 2) }}</pre>
       </div>
-    </details>
   </div>
+</div>
 </template>
 
 <script setup lang="ts">
@@ -148,7 +135,6 @@ const editableProjectName = ref('')
 const editableNoveltyCriteria = ref('')
 const inlineSaving = ref(false)
 const inlineSaveError = ref<string | null>(null)
-const rawCopied = ref(false)
 
 function formatUtcMinute(value: string | null | undefined): string {
   if (!value) return 'not set'
@@ -275,20 +261,6 @@ async function deleteProject() {
     alert('Failed to delete project: ' + (err as Error).message)
   } finally {
     deleting.value = false
-  }
-}
-
-async function copyRawConfig() {
-  if (!project.value) return
-
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(project.value.config, null, 2))
-    rawCopied.value = true
-    setTimeout(() => {
-      rawCopied.value = false
-    }, 1500)
-  } catch (err) {
-    console.error('Failed to copy raw config:', err)
   }
 }
 

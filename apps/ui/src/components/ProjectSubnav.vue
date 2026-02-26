@@ -1,21 +1,19 @@
 <template>
-  <div class="rounded-lg border bg-card p-2">
-    <nav class="flex flex-wrap gap-2">
-      <RouterLink
-        v-for="item in items"
-        :key="item.path"
-        :to="item.path"
-        :class="[
-          'rounded-md px-3 py-2 text-sm transition-colors',
-          isActive(item.path)
-            ? 'bg-primary text-primary-foreground'
-            : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-        ]"
-      >
-        {{ item.label }}
-      </RouterLink>
-    </nav>
-  </div>
+  <nav class="flex flex-row md:flex-col gap-1 overflow-x-auto w-full md:w-48 shrink-0 pb-2 md:pb-0">
+    <RouterLink
+      v-for="item in items"
+      :key="item.path"
+      :to="item.path"
+      :class="[
+        'rounded-md px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap',
+        isActive(item.path)
+          ? 'bg-primary text-primary-foreground'
+          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+      ]"
+    >
+      {{ item.label }}
+    </RouterLink>
+  </nav>
 </template>
 
 <script setup lang="ts">

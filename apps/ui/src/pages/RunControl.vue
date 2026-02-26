@@ -5,7 +5,9 @@
       <p class="text-muted-foreground">{{ activeProject?.config.project_id || projectId }}</p>
     </div>
 
+    <div class="flex flex-col md:flex-row gap-6 items-start w-full pb-6">
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
+    <div class="flex-1 min-w-0 space-y-6 w-full">
 
     <div v-if="!activeProject" class="rounded-lg border border-destructive bg-destructive/10 p-6">
       <p class="text-destructive">No project configured</p>
@@ -163,7 +165,9 @@
         </ul>
       </div>
     </div>
+      </div>
   </div>
+</div>
 </template>
 
 <script setup lang="ts">

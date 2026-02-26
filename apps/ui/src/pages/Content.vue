@@ -5,7 +5,9 @@
       <p class="text-muted-foreground">{{ project?.config.project_id || projectId }}</p>
     </div>
 
+    <div class="flex flex-col md:flex-row gap-6 items-start w-full pb-6">
     <ProjectSubnav v-if="projectId" :project-id="projectId" />
+    <div class="flex-1 min-w-0 space-y-6 w-full">
 
     <!-- Filters -->
     <div class="flex gap-4">
@@ -64,7 +66,9 @@
         </div>
       </div>
     </div>
+      </div>
   </div>
+</div>
 </template>
 
 <script setup lang="ts">
