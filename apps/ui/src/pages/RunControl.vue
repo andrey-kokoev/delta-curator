@@ -144,14 +144,12 @@
               <div class="min-w-0">
                 <p class="truncate font-medium">{{ item.title || item.source_item_id }}</p>
                 <p class="truncate text-xs text-muted-foreground">{{ item.source_item_id }}</p>
-                <p v-if="item.url" class="truncate text-xs text-muted-foreground">{{ item.url }}</p>
+                <a v-if="item.url" :href="item.url" target="_blank" rel="noopener" class="truncate text-xs text-blue-600 hover:underline">{{ item.url }}</a>
                 <p v-if="item.decision_reason" class="truncate text-xs text-muted-foreground">{{ item.decision_reason }}</p>
                 <p v-else-if="item.rank_score !== null && item.rank_score !== undefined" class="truncate text-xs text-muted-foreground">
                   rank {{ Number(item.rank_score).toFixed(3) }}
                 </p>
-                <p v-if="item.rerank_input" class="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">
-                  reranker input: {{ item.rerank_input }}
-                </p>
+                <p v-if="item.rerank_input" class="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground" v-html="formatRerankInput(item.rerank_input)"></p>
               </div>
               <span class="shrink-0 rounded px-2 py-0.5 text-xs font-medium" :class="{
                 'bg-emerald-100 text-emerald-800': item.outcome === 'event_created',
@@ -176,6 +174,21 @@ import { useRoute } from 'vue-router'
 import { useApiStore } from '@/stores/api'
 import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import type { ProjectConfig, InspectResult, RunResult } from '@/types'
+
+function formatRerankInput(input: string): string {
+  return input
+    .split('\n')
+    .map(line => {
+      if (line.startsWith('link:')) {
+        const url = line.slice(5).trim()
+        if (url.startsWith('http')) {
+          return `<a href="${url}" target="_blank" rel="noopener" class="text-blue-600 hover:underline">${url}</a>`
+        }
+      }
+      return line.replace(/(https?:\/\/[^\s<>"]+)/g, '<a href="$1" target="_blank" rel="noopener" class="text-blue-600 hover:underline">$1</a>')
+    })
+    .join('\n')
+}
 
 const apiStore = useApiStore()
 const route = useRoute()
