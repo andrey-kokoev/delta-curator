@@ -139,7 +139,12 @@
               >
                 <p class="truncate">{{ item.title || item.source_item_id }}</p>
                 <p class="truncate text-muted-foreground">{{ item.url || item.source_item_id }}</p>
-                <p class="truncate text-muted-foreground">{{ item.outcome || 'pending' }}</p>
+                <p class="truncate text-muted-foreground">
+                  {{ item.outcome || 'pending' }}
+                  <span v-if="item.outcome === 'skipped_low_rank' && item.rank_score != null">
+                    (rank: {{ Number(item.rank_score).toFixed(3) }})
+                  </span>
+                </p>
               </li>
             </ul>
           </div>
