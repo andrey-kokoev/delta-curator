@@ -78,19 +78,6 @@
               <div class="flex items-center gap-2">
                 <span class="text-muted-foreground shrink-0 text-xs">{{ expandedSources.has(source.id) ? '▼' : '▶' }}</span>
                 <p class="font-medium">{{ source.id }}</p>
-                <span
-                  class="rounded-full px-2 py-0.5 text-xs font-medium"
-                  :class="source.enabled === false ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'"
-                >
-                  {{ source.enabled === false ? 'Paused' : 'Enabled' }}
-                </span>
-                <button
-                  class="rounded border px-2 py-0.5 text-xs font-medium hover:bg-accent"
-                  :disabled="runningSourceId === source.id"
-                  @click.stop="runSourceNow(source.id)"
-                >
-                  {{ runningSourceId === source.id ? 'Running…' : 'Run Now' }}
-                </button>
               </div>
               <p class="text-sm text-muted-foreground ml-5">{{ source.plugin }}</p>
               <p class="text-xs text-muted-foreground ml-5">
@@ -220,7 +207,6 @@ const inlineSaveError = ref<string | null>(null)
 // Run state
 const sourceRuns = ref<Record<string, SourceRunSummary[]>>({})
 const lastRunBySource = ref<Record<string, RunResult>>({})
-const runningSourceId = ref<string | null>(null)
 const expandedRuns = ref(new Set<string>())
 const expandedSources = ref(new Set<string>())
 
@@ -303,23 +289,6 @@ async function loadSourceRuns() {
   } catch (err) {
     console.error('Failed to load source runs:', err)
     sourceRuns.value = {}
-  }
-}
-
-async function runSourceNow(sourceId: string) {
-  if (!sourceId) return
-
-  try {
-    runningSourceId.value = sourceId
-    const result = await apiStore.runBatch(sourceId, 50, projectId)
-    lastRunBySource.value[sourceId] = result
-    await loadSourceCursors()
-    await loadSourceRuns()
-  } catch (err) {
-    console.error('Run failed:', err)
-    alert('Run failed: ' + (err as Error).message)
-  } finally {
-    runningSourceId.value = null
   }
 }
 
