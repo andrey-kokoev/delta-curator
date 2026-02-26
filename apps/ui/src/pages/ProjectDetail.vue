@@ -8,7 +8,7 @@
     <RouterLink to="/projects" class="text-primary hover:underline">Back to projects</RouterLink>
   </div>
 
-  <div v-else class="space-y-6 w-full border rounded-lg bg-card p-6">
+  <div v-else class="space-y-6 w-full">
     <!-- Header -->
     <div class="space-y-3 w-full">
       <div class="flex items-start justify-between w-full gap-3">
