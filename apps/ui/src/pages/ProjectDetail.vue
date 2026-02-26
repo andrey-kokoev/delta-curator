@@ -70,11 +70,13 @@
         <div
           v-for="source in project.config.sources"
           :key="source.id"
-          class="p-4 space-y-4"
+          class="p-4 space-y-4 cursor-pointer hover:bg-muted/30 transition-colors"
+          @click="toggleSourceExpand(source.id)"
         >
           <div class="flex items-start justify-between gap-4">
             <div>
               <div class="flex items-center gap-2">
+                <span class="text-muted-foreground shrink-0 text-xs">{{ expandedSources.has(source.id) ? '▼' : '▶' }}</span>
                 <p class="font-medium">{{ source.id }}</p>
                 <span
                   class="rounded-full px-2 py-0.5 text-xs font-medium"
@@ -85,23 +87,23 @@
                 <button
                   class="rounded border px-2 py-0.5 text-xs font-medium hover:bg-accent"
                   :disabled="runningSourceId === source.id"
-                  @click="runSourceNow(source.id)"
+                  @click.stop="runSourceNow(source.id)"
                 >
                   {{ runningSourceId === source.id ? 'Running…' : 'Run Now' }}
                 </button>
               </div>
-              <p class="text-sm text-muted-foreground">{{ source.plugin }}</p>
-              <p class="text-xs text-muted-foreground">
+              <p class="text-sm text-muted-foreground ml-5">{{ source.plugin }}</p>
+              <p class="text-xs text-muted-foreground ml-5">
                 Next run rule: RSS pubDate after {{ formatUtcMinute(sourceCursors[source.id]?.cursor_published_at) }}
               </p>
             </div>
-            <code class="text-xs bg-muted px-2 py-1 rounded self-start">
+            <code class="text-xs bg-muted px-2 py-1 rounded self-start" @click.stop>
               {{ JSON.stringify(source.config).slice(0, 80) }}...
             </code>
           </div>
 
           <!-- Same runs breakdown as Sources tab -->
-          <div class="border-t pt-4">
+          <div v-if="expandedSources.has(source.id)" class="border-t pt-4 ml-5 cursor-default" @click.stop>
             <p class="text-sm font-medium mb-2">Recent Runs</p>
 
             <div v-if="lastRunBySource[source.id]" class="rounded border bg-muted/40 p-2 text-xs space-y-1 mb-2">
@@ -220,6 +222,17 @@ const sourceRuns = ref<Record<string, SourceRunSummary[]>>({})
 const lastRunBySource = ref<Record<string, RunResult>>({})
 const runningSourceId = ref<string | null>(null)
 const expandedRuns = ref(new Set<string>())
+const expandedSources = ref(new Set<string>())
+
+function toggleSourceExpand(sourceId: string) {
+  const newSet = new Set(expandedSources.value)
+  if (newSet.has(sourceId)) {
+    newSet.delete(sourceId)
+  } else {
+    newSet.add(sourceId)
+  }
+  expandedSources.value = newSet
+}
 
 function toggleRunExpand(commitId: string) {
   const newSet = new Set(expandedRuns.value)
