@@ -99,6 +99,25 @@ export interface ProjectIndex {
   hash: string
   created_at: string
   updated_at: string
+  last_reviewed_at?: string | null
+  pinned?: boolean
+  last_activity_at?: string | null
+}
+
+export interface ProjectListItem {
+  project_id: string
+  project_name: string
+  topic_label: string
+  sources_count: number
+  pinned: boolean
+  last_reviewed_at: string | null
+  last_activity_at: string | null
+}
+
+export interface ProjectActivity {
+  project_id: string
+  events_count: number
+  last_activity_at: string | null
 }
 
 export interface CuratedDoc {

@@ -146,6 +146,35 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
       }
     }
 
+    // Projects API (Dashboard)
+    // GET /projects — list all projects with dashboard fields
+    if (pathname === '/projects' && method === 'GET') {
+      return await handleProjectsList(request, env);
+    }
+
+    // GET /projects/activity — get activity counts per project
+    if (pathname === '/projects/activity' && method === 'GET') {
+      return await handleProjectsActivity(request, env);
+    }
+
+    // POST /projects/:id/review — mark project as reviewed
+    if (pathname.startsWith('/projects/') && pathname.endsWith('/review') && method === 'POST') {
+      const parts = pathname.split('/').filter(Boolean);
+      if (parts.length === 3 && parts[2] === 'review') {
+        const projectId = parts[1];
+        return await handleProjectReview(request, env, projectId);
+      }
+    }
+
+    // PATCH /projects/:id — update project (e.g., pinned status)
+    if (pathname.startsWith('/projects/') && method === 'PATCH') {
+      const parts = pathname.split('/').filter(Boolean);
+      if (parts.length === 2) {
+        const projectId = parts[1];
+        return await handleProjectUpdate(request, env, projectId);
+      }
+    }
+
     // Not found
     return new Response(JSON.stringify({ error: 'Not found' }), {
       status: 404,
@@ -546,6 +575,353 @@ async function handleConfigDelete(request: Request, env: Env, projectId: string)
         project_id: projectId,
         deleted: true
       }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+// ============================================================================
+// Projects API (Dashboard)
+// ============================================================================
+
+interface ProjectListItem {
+  project_id: string;
+  project_name: string;
+  topic_label: string;
+  sources_count: number;
+  pinned: boolean;
+  last_reviewed_at: string | null;
+  last_activity_at: string | null;
+}
+
+/**
+ * GET /projects
+ * List all projects with dashboard fields
+ */
+async function handleProjectsList(request: Request, env: Env): Promise<Response> {
+  try {
+    // Query project_configs with new fields
+    const result = await env.DB.prepare(
+      `SELECT 
+        pc.project_id,
+        pc.project_name,
+        pc.pinned,
+        pc.last_reviewed_at,
+        pc.last_activity_at,
+        pc.r2_key
+      FROM project_configs pc
+      ORDER BY pc.updated_at DESC`
+    ).all<{
+      project_id: string;
+      project_name: string;
+      pinned: number;
+      last_reviewed_at: string | null;
+      last_activity_at: string | null;
+      r2_key: string;
+    }>();
+
+    const rows = result.results || [];
+
+    // Fetch full configs to get topic and sources count
+    const projects: ProjectListItem[] = await Promise.all(
+      rows.map(async (row) => {
+        // Get config from R2 for topic and sources
+        let topicLabel = 'Unknown';
+        let sourcesCount = 0;
+
+        try {
+          const obj = await env.ARTIFACTS.get(row.r2_key);
+          if (obj) {
+            const content = await obj.text();
+            const config = JSON.parse(content);
+            topicLabel = config.topic?.label || 'Unknown';
+            sourcesCount = config.sources?.length || 0;
+          }
+        } catch {
+          // Fallback to defaults if R2 fetch fails
+        }
+
+        return {
+          project_id: row.project_id,
+          project_name: row.project_name,
+          topic_label: topicLabel,
+          sources_count: sourcesCount,
+          pinned: Boolean(row.pinned),
+          last_reviewed_at: row.last_reviewed_at,
+          last_activity_at: row.last_activity_at
+        };
+      })
+    );
+
+    return new Response(
+      JSON.stringify({ projects }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * POST /projects/:id/review
+ * Mark project as reviewed (sets last_reviewed_at to now)
+ */
+async function handleProjectReview(request: Request, env: Env, projectId: string): Promise<Response> {
+  try {
+    const now = new Date().toISOString();
+
+    const result = await env.DB.prepare(
+      `UPDATE project_configs 
+       SET last_reviewed_at = ?, updated_at = ?
+       WHERE project_id = ?`
+    ).bind(now, now, projectId).run();
+
+    if (result.meta.changes === 0) {
+      return new Response(
+        JSON.stringify({ error: 'Project not found' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Fetch updated project
+    const row = await env.DB.prepare(
+      `SELECT 
+        pc.project_id,
+        pc.project_name,
+        pc.pinned,
+        pc.last_reviewed_at,
+        pc.last_activity_at,
+        pc.r2_key
+      FROM project_configs pc
+      WHERE pc.project_id = ?`
+    ).bind(projectId).first<{
+      project_id: string;
+      project_name: string;
+      pinned: number;
+      last_reviewed_at: string | null;
+      last_activity_at: string | null;
+      r2_key: string;
+    }>();
+
+    if (!row) {
+      return new Response(
+        JSON.stringify({ error: 'Project not found' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Get config from R2 for topic and sources
+    let topicLabel = 'Unknown';
+    let sourcesCount = 0;
+    try {
+      const obj = await env.ARTIFACTS.get(row.r2_key);
+      if (obj) {
+        const content = await obj.text();
+        const config = JSON.parse(content);
+        topicLabel = config.topic?.label || 'Unknown';
+        sourcesCount = config.sources?.length || 0;
+      }
+    } catch {
+      // Fallback
+    }
+
+    const project: ProjectListItem = {
+      project_id: row.project_id,
+      project_name: row.project_name,
+      topic_label: topicLabel,
+      sources_count: sourcesCount,
+      pinned: Boolean(row.pinned),
+      last_reviewed_at: row.last_reviewed_at,
+      last_activity_at: row.last_activity_at
+    };
+
+    return new Response(
+      JSON.stringify({ success: true, project }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+/**
+ * PATCH /projects/:id
+ * Update project fields (e.g., pinned status)
+ */
+async function handleProjectUpdate(request: Request, env: Env, projectId: string): Promise<Response> {
+  try {
+    const body = await request.json() as { pinned?: boolean };
+
+    if (typeof body.pinned !== 'boolean') {
+      return new Response(
+        JSON.stringify({ error: 'Invalid request: pinned must be a boolean' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    const result = await env.DB.prepare(
+      `UPDATE project_configs 
+       SET pinned = ?, updated_at = ?
+       WHERE project_id = ?`
+    ).bind(body.pinned ? 1 : 0, now, projectId).run();
+
+    if (result.meta.changes === 0) {
+      return new Response(
+        JSON.stringify({ error: 'Project not found' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Fetch updated project
+    const row = await env.DB.prepare(
+      `SELECT 
+        pc.project_id,
+        pc.project_name,
+        pc.pinned,
+        pc.last_reviewed_at,
+        pc.last_activity_at,
+        pc.r2_key
+      FROM project_configs pc
+      WHERE pc.project_id = ?`
+    ).bind(projectId).first<{
+      project_id: string;
+      project_name: string;
+      pinned: number;
+      last_reviewed_at: string | null;
+      last_activity_at: string | null;
+      r2_key: string;
+    }>();
+
+    if (!row) {
+      return new Response(
+        JSON.stringify({ error: 'Project not found' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Get config from R2 for topic and sources
+    let topicLabel = 'Unknown';
+    let sourcesCount = 0;
+    try {
+      const obj = await env.ARTIFACTS.get(row.r2_key);
+      if (obj) {
+        const content = await obj.text();
+        const config = JSON.parse(content);
+        topicLabel = config.topic?.label || 'Unknown';
+        sourcesCount = config.sources?.length || 0;
+      }
+    } catch {
+      // Fallback
+    }
+
+    const project: ProjectListItem = {
+      project_id: row.project_id,
+      project_name: row.project_name,
+      topic_label: topicLabel,
+      sources_count: sourcesCount,
+      pinned: Boolean(row.pinned),
+      last_reviewed_at: row.last_reviewed_at,
+      last_activity_at: row.last_activity_at
+    };
+
+    return new Response(
+      JSON.stringify({ success: true, project }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err) }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+interface ActivityResult {
+  project_id: string;
+  events_count: number;
+  last_activity_at: string | null;
+}
+
+/**
+ * GET /projects/activity?window=24h|7d|since_review
+ * Get activity counts per project for the specified window
+ */
+async function handleProjectsActivity(request: Request, env: Env): Promise<Response> {
+  try {
+    const url = new URL(request.url);
+    const window = url.searchParams.get('window') || '24h';
+
+    // Get all projects with their last_reviewed_at
+    const projectsResult = await env.DB.prepare(
+      `SELECT project_id, last_reviewed_at, last_activity_at FROM project_configs`
+    ).all<{
+      project_id: string;
+      last_reviewed_at: string | null;
+      last_activity_at: string | null;
+    }>();
+
+    const projects = projectsResult.results || [];
+
+    // Calculate time threshold based on window
+    const now = Date.now();
+    let timeThreshold: string | null = null;
+
+    if (window === '24h') {
+      timeThreshold = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+    } else if (window === '7d') {
+      timeThreshold = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+    }
+    // For 'since_review', we'll use per-project last_reviewed_at
+
+    // Get activity counts per project
+    const activityResults: ActivityResult[] = await Promise.all(
+      projects.map(async (project) => {
+        let count = 0;
+
+        if (window === 'since_review') {
+          // Use project's last_reviewed_at, fallback to 7 days ago if null
+          const reviewThreshold = project.last_reviewed_at 
+            ? project.last_reviewed_at 
+            : new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+          const countResult = await env.DB.prepare(
+            `SELECT COUNT(*) as total FROM commits 
+             WHERE project_id = ? AND created_at > ?`
+          ).bind(project.project_id, reviewThreshold).first<{ total: number }>();
+
+          count = countResult?.total || 0;
+        } else if (timeThreshold) {
+          const countResult = await env.DB.prepare(
+            `SELECT COUNT(*) as total FROM commits 
+             WHERE project_id = ? AND created_at > ?`
+          ).bind(project.project_id, timeThreshold).first<{ total: number }>();
+
+          count = countResult?.total || 0;
+        }
+
+        return {
+          project_id: project.project_id,
+          events_count: count,
+          last_activity_at: project.last_activity_at
+        };
+      })
+    );
+
+    return new Response(
+      JSON.stringify({ activity: activityResults }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
   } catch (err) {

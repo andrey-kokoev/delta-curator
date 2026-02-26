@@ -47,6 +47,13 @@ The repository is not worker-only; UI and project-scoped UX are part of the curr
 - `POST /api/auth/logout`
 - Microsoft OAuth routes are present.
 
+### Dashboard (Projects API)
+
+- `GET /projects` — list all projects with dashboard fields (topic_label, sources_count, pinned, last_reviewed_at, last_activity_at)
+- `GET /projects/activity?window=24h|7d|since_review` — get activity counts per project
+- `POST /projects/:id/review` — mark project as reviewed (sets last_reviewed_at)
+- `PATCH /projects/:id` — update project (supports `{ pinned: boolean }`)
+
 ### Operations (strict project-scoped)
 
 The following now require explicit `project_id`:
@@ -110,6 +117,15 @@ Limits currently include:
 - Active-project normalization enforces single-active consistency for config listing/get-active behavior.
 - Project-scoped routes and APIs are the preferred context model.
 
+### Dashboard Schema (project_configs table)
+
+Added columns for dashboard functionality:
+- `last_reviewed_at TIMESTAMP NULL` — when project was last reviewed
+- `pinned BOOLEAN NOT NULL DEFAULT false` — pin status for dashboard
+- `last_activity_at TIMESTAMP NULL` — last time project had processing activity
+
+These columns are automatically migrated on worker startup via `ensureProjectConfigsSchema()`.
+
 ---
 
 ## 8) Contributor Expectations
@@ -122,3 +138,18 @@ When changing behavior, keep these aligned:
 - UI pages under `apps/ui/src/pages` that call run/inspect/search/cursor APIs
 
 Update this file and `README.md` whenever route contracts, required parameters, or source state semantics change.
+
+### Dashboard UI
+
+The Home page (`apps/ui/src/pages/Home.vue`) implements the dashboard redesign:
+- Instance summary strip (projects, docs, commits, health)
+- Window switcher (24h, 7d, since review) — affects activity counts only
+- Pinned projects section (ordered by last_activity_at desc)
+- Recent projects section (top 6, ordered by last_activity_at desc)
+- Quick action: New Project only
+
+Project cards (`apps/ui/src/components/ProjectCard.vue`) display:
+- Project name, ID, topic, sources count
+- Last activity and last reviewed timestamps
+- Activity count based on selected window
+- Pin toggle and "Reviewed now" actions with optimistic UI updates

@@ -4,6 +4,8 @@ import { useAuthStore } from './auth'
 import type {
   ProjectConfig,
   ProjectIndex,
+  ProjectListItem,
+  ProjectActivity,
   SearchResult,
   HealthStatus,
   RunResult,
@@ -255,6 +257,49 @@ export const useApiStore = defineStore('api', () => {
     return fetchApi(`/seed?activate=${activate}`, { method: 'POST' })
   }
 
+  // Projects API (Dashboard)
+  async function listProjects(): Promise<{ projects: ProjectListItem[] }> {
+    return fetchApi('/projects')
+  }
+
+  async function getProjectActivity(
+    window: '24h' | '7d' | 'since_review'
+  ): Promise<{ activity: ProjectActivity[] }> {
+    return fetchApi(`/projects/activity?window=${window}`)
+  }
+
+  async function markProjectReviewed(projectId: string): Promise<{
+    success: boolean
+    project: ProjectListItem
+  }> {
+    return fetchApi(`/projects/${projectId}/review`, { method: 'POST' })
+  }
+
+  async function updateProject(
+    projectId: string,
+    updates: { pinned?: boolean }
+  ): Promise<{ success: boolean; project: ProjectListItem }> {
+    return fetchApi(`/projects/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates)
+    })
+  }
+
+  // Instance stats for dashboard
+  async function getInstanceStats(): Promise<{
+    projects: number
+    docs: number
+    commits: number
+  }> {
+    // Get projects count
+    const projectsRes = await listProjects()
+    const projects = projectsRes.projects.length
+
+    // Try to get docs and commits counts from health or other endpoints
+    // For now, return 0 for docs and commits as they require aggregation
+    return { projects, docs: 0, commits: 0 }
+  }
+
   return {
     isLoading,
     error,
@@ -274,6 +319,11 @@ export const useApiStore = defineStore('api', () => {
     inspect,
     listRuns,
     getHealth,
-    seedConfig
+    seedConfig,
+    listProjects,
+    getProjectActivity,
+    markProjectReviewed,
+    updateProject,
+    getInstanceStats
   }
 })

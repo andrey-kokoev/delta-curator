@@ -553,9 +553,48 @@ function extractRssSummaryMetrics(
   }
 }
 
-async function getTableColumns(env: Env, table: 'commits' | 'source_state' | 'curated_docs'): Promise<Set<string>> {
+async function getTableColumns(env: Env, table: 'commits' | 'source_state' | 'curated_docs' | 'project_configs'): Promise<Set<string>> {
   const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>()
   return new Set((results ?? []).map((row) => row.name))
+}
+
+async function ensureProjectConfigsSchema(env: Env): Promise<void> {
+  const columns = await getTableColumns(env, 'project_configs')
+
+  if (!columns.has('last_reviewed_at')) {
+    try {
+      await env.DB.prepare('ALTER TABLE project_configs ADD COLUMN last_reviewed_at TEXT').run()
+    } catch (err) {
+      const message = String(err)
+      if (!message.includes('duplicate column name')) throw err
+    }
+  }
+
+  if (!columns.has('pinned')) {
+    try {
+      await env.DB.prepare('ALTER TABLE project_configs ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0').run()
+    } catch (err) {
+      const message = String(err)
+      if (!message.includes('duplicate column name')) throw err
+    }
+  }
+
+  if (!columns.has('last_activity_at')) {
+    try {
+      await env.DB.prepare('ALTER TABLE project_configs ADD COLUMN last_activity_at TEXT').run()
+    } catch (err) {
+      const message = String(err)
+      if (!message.includes('duplicate column name')) throw err
+    }
+  }
+
+  await env.DB.prepare(
+    'CREATE INDEX IF NOT EXISTS idx_project_configs_pinned ON project_configs(pinned)'
+  ).run()
+
+  await env.DB.prepare(
+    'CREATE INDEX IF NOT EXISTS idx_project_configs_activity ON project_configs(last_activity_at)'
+  ).run()
 }
 
 async function ensureProcessedUrlsSchema(env: Env): Promise<void> {
@@ -1001,11 +1040,14 @@ async function writeConfig(
       customMetadata: { 'project-id': projectId, version: INTERNAL_CONFIG_REVISION, hash }
     })
 
+    // Ensure schema has new columns
+    await ensureProjectConfigsSchema(env)
+
     // Write to D1
     await env.DB.prepare(
       `INSERT OR REPLACE INTO project_configs
-       (project_id, version, project_name, is_active, r2_key, hash, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (project_id, version, project_name, is_active, r2_key, hash, created_at, updated_at, last_activity_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       projectId,
       INTERNAL_CONFIG_REVISION,
@@ -1014,6 +1056,7 @@ async function writeConfig(
       r2Key,
       hash,
       validConfig.created_at || now,
+      now,
       now
     ).run()
 
@@ -2232,6 +2275,11 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         )
       }
 
+      // Update project's last_activity_at even for cursor-only commits
+      await env.DB.prepare(
+        `UPDATE project_configs SET last_activity_at = ? WHERE project_id = ?`
+      ).bind(now, config.project_id).run()
+
       return new Response(JSON.stringify({
         commit_id: cursorCommit.commitId,
         trace_id: traceId,
@@ -2435,6 +2483,11 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       now,
       { commitId, commitKey }
     )
+
+    // Update project's last_activity_at
+    await env.DB.prepare(
+      `UPDATE project_configs SET last_activity_at = ? WHERE project_id = ?`
+    ).bind(now, config.project_id).run()
 
     logRun('run.summary', {
       status: 'completed',

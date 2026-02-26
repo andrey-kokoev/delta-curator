@@ -117,9 +117,14 @@ CREATE TABLE IF NOT EXISTS project_configs (
   r2_key TEXT NOT NULL,
   hash TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  last_reviewed_at TEXT,
+  pinned BOOLEAN NOT NULL DEFAULT 0,
+  last_activity_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_project_configs_active ON project_configs(is_active);
 CREATE INDEX IF NOT EXISTS idx_project_configs_updated ON project_configs(updated_at);
+CREATE INDEX IF NOT EXISTS idx_project_configs_pinned ON project_configs(pinned);
+CREATE INDEX IF NOT EXISTS idx_project_configs_activity ON project_configs(last_activity_at);
 `;
