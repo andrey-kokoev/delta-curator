@@ -70,26 +70,104 @@
         <div
           v-for="source in project.config.sources"
           :key="source.id"
-          class="p-4 flex items-start justify-between gap-4"
+          class="p-4 space-y-4"
         >
-          <div>
-            <div class="flex items-center gap-2">
-              <p class="font-medium">{{ source.id }}</p>
-              <span
-                class="rounded-full px-2 py-0.5 text-xs font-medium"
-                :class="source.enabled === false ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'"
-              >
-                {{ source.enabled === false ? 'Paused' : 'Enabled' }}
-              </span>
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <p class="font-medium">{{ source.id }}</p>
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="source.enabled === false ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'"
+                >
+                  {{ source.enabled === false ? 'Paused' : 'Enabled' }}
+                </span>
+                <button
+                  class="rounded border px-2 py-0.5 text-xs font-medium hover:bg-accent"
+                  :disabled="runningSourceId === source.id"
+                  @click="runSourceNow(source.id)"
+                >
+                  {{ runningSourceId === source.id ? 'Running…' : 'Run Now' }}
+                </button>
+              </div>
+              <p class="text-sm text-muted-foreground">{{ source.plugin }}</p>
+              <p class="text-xs text-muted-foreground">
+                Next run rule: RSS pubDate after {{ formatUtcMinute(sourceCursors[source.id]?.cursor_published_at) }}
+              </p>
             </div>
-            <p class="text-sm text-muted-foreground">{{ source.plugin }}</p>
-            <p class="text-xs text-muted-foreground">
-              Next run rule: RSS pubDate after {{ formatUtcMinute(sourceCursors[source.id]?.cursor_published_at) }}
-            </p>
+            <code class="text-xs bg-muted px-2 py-1 rounded self-start">
+              {{ JSON.stringify(source.config).slice(0, 80) }}...
+            </code>
           </div>
-          <code class="text-xs bg-muted px-2 py-1 rounded self-start">
-            {{ JSON.stringify(source.config).slice(0, 80) }}...
-          </code>
+
+          <!-- Same runs breakdown as Sources tab -->
+          <div class="border-t pt-4">
+            <p class="text-sm font-medium mb-2">Recent Runs</p>
+
+            <div v-if="lastRunBySource[source.id]" class="rounded border bg-muted/40 p-2 text-xs space-y-1 mb-2">
+              <p class="font-medium">Last Run Details</p>
+              <p v-if="lastRunBySource[source.id]?.rerank_query" class="text-muted-foreground truncate">
+                reranker query: {{ lastRunBySource[source.id]?.rerank_query }}
+              </p>
+              <ul v-if="(lastRunBySource[source.id]?.processed_items || []).length" class="max-h-40 overflow-auto space-y-1">
+                <li
+                  v-for="item in (lastRunBySource[source.id]?.processed_items || [])"
+                  :key="item.source_item_id"
+                  class="rounded bg-background px-2 py-1"
+                >
+                  <p class="truncate">{{ item.title || item.source_item_id }}</p>
+                  <p class="truncate text-muted-foreground">{{ item.url || item.source_item_id }}</p>
+                  <p class="truncate text-muted-foreground">
+                    {{ item.outcome || 'pending' }}
+                    <span v-if="item.outcome === 'skipped_low_rank' && item.rank_score != null">
+                      (rank: {{ Number(item.rank_score).toFixed(3) }})
+                    </span>
+                  </p>
+                </li>
+              </ul>
+            </div>
+
+            <div v-if="(sourceRuns[source.id] || []).length === 0" class="text-xs text-muted-foreground">
+              No runs yet.
+            </div>
+            <ul v-else class="space-y-1 text-xs text-muted-foreground">
+              <li
+                v-for="run in sourceRuns[source.id]"
+                :key="run.commit_id"
+                class="rounded bg-muted/60 px-2 py-1 cursor-pointer hover:bg-muted/80 transition-colors"
+                @click="toggleRunExpand(run.commit_id)"
+              >
+                <div class="flex items-center justify-between">
+                  <span>{{ formatRunTime(run.run_at) }} · items {{ formatRunMetric(run.item_count, 'items') }} · events {{ formatRunMetric(run.event_count, 'events') }}</span>
+                  <span class="text-muted-foreground ml-2 shrink-0">{{ expandedRuns.has(run.commit_id) ? '▼' : '▶' }}</span>
+                </div>
+                <div v-if="expandedRuns.has(run.commit_id)" class="mt-2 text-xs space-y-1 cursor-default text-foreground" @click.stop>
+                  <p v-if="run.rerank_query" class="text-muted-foreground truncate">
+                    reranker query: {{ run.rerank_query }}
+                  </p>
+                  <ul v-if="(run.processed_items || []).length" class="max-h-40 overflow-auto space-y-1">
+                    <li
+                      v-for="item in (run.processed_items || [])"
+                      :key="item.source_item_id"
+                      class="rounded bg-background px-2 py-1 border border-border/50"
+                    >
+                      <p class="truncate">{{ item.title || item.source_item_id }}</p>
+                      <p class="truncate text-muted-foreground">{{ item.url || item.source_item_id }}</p>
+                      <p class="truncate text-muted-foreground">
+                        {{ item.outcome || 'pending' }}
+                        <span v-if="item.outcome === 'skipped_low_rank' && item.rank_score != null">
+                          (rank: {{ Number(item.rank_score).toFixed(3) }})
+                        </span>
+                      </p>
+                    </li>
+                  </ul>
+                  <div v-else class="text-muted-foreground italic mt-1">
+                    No detailed item records found for this run.
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
     </div>
@@ -120,7 +198,8 @@ import { ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useApiStore } from '@/stores/api'
 import ProjectSubnav from '@/components/ProjectSubnav.vue'
-import type { ProjectConfig, ProjectIndex, InspectResult, InspectSourceCursor } from '@/types'
+import type { ProjectConfig, ProjectIndex, InspectResult, InspectSourceCursor, SourceRunSummary, RunResult } from '@/types'
+import { formatRelativeTime } from '@/lib/utils'
 
 const route = useRoute()
 const router = useRouter()
@@ -135,6 +214,37 @@ const editableProjectName = ref('')
 const editableNoveltyCriteria = ref('')
 const inlineSaving = ref(false)
 const inlineSaveError = ref<string | null>(null)
+
+// Run state
+const sourceRuns = ref<Record<string, SourceRunSummary[]>>({})
+const lastRunBySource = ref<Record<string, RunResult>>({})
+const runningSourceId = ref<string | null>(null)
+const expandedRuns = ref(new Set<string>())
+
+function toggleRunExpand(commitId: string) {
+  const newSet = new Set(expandedRuns.value)
+  if (newSet.has(commitId)) {
+    newSet.delete(commitId)
+  } else {
+    newSet.add(commitId)
+  }
+  expandedRuns.value = newSet
+}
+
+function formatRunTime(value: string | null): string {
+  if (!value) return 'unknown time'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return `${formatRelativeTime(date)} (${date.toISOString().slice(0, 16)}Z)`
+}
+
+function formatRunMetric(value: number | null, kind: 'items' | 'events'): string {
+  if (value === null || value === undefined) return 'n/a'
+  if (value === 0) {
+    return kind === 'items' ? '0 (no items fetched)' : '0 (no accepted events)'
+  }
+  return String(value)
+}
 
 function formatUtcMinute(value: string | null | undefined): string {
   if (!value) return 'not set'
@@ -159,6 +269,47 @@ async function loadSourceCursors() {
   }
 }
 
+async function loadSourceRuns() {
+  if (!project.value) return
+  try {
+    const bySource: Record<string, SourceRunSummary[]> = {}
+
+    for (const source of project.value.config.sources) {
+      if (!source.id) continue
+
+      const result = await apiStore.listRuns({
+        projectId,
+        sourceId: source.id,
+        limit: 5
+      })
+
+      bySource[source.id] = result.runs || []
+    }
+
+    sourceRuns.value = bySource
+  } catch (err) {
+    console.error('Failed to load source runs:', err)
+    sourceRuns.value = {}
+  }
+}
+
+async function runSourceNow(sourceId: string) {
+  if (!sourceId) return
+
+  try {
+    runningSourceId.value = sourceId
+    const result = await apiStore.runBatch(sourceId, 50, projectId)
+    lastRunBySource.value[sourceId] = result
+    await loadSourceCursors()
+    await loadSourceRuns()
+  } catch (err) {
+    console.error('Run failed:', err)
+    alert('Run failed: ' + (err as Error).message)
+  } finally {
+    runningSourceId.value = null
+  }
+}
+
 async function loadProject() {
   try {
     loading.value = true
@@ -169,6 +320,7 @@ async function loadProject() {
       ? rules.map((rule) => String(rule)).join(', ')
       : ''
     await loadSourceCursors()
+    await loadSourceRuns()
   } catch (err) {
     console.error('Failed to load project:', err)
   } finally {
