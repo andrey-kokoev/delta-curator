@@ -51,3 +51,7 @@ apps/worker/.dev.vars
 
 # Worker static assets (copied from UI build)
 apps/worker/public/
+
+.claude
+.history
+.opencode
