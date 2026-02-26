@@ -414,7 +414,6 @@ async function handleConfigWrite(request: Request, env: Env): Promise<Response> 
       JSON.stringify({
         success: true,
         project_id: result.projectId,
-        version: result.version,
         r2_key: result.r2Key,
         hash: result.hash,
         active: activate
