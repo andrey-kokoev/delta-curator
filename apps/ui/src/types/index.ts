@@ -166,6 +166,8 @@ export interface SourceRunSummary {
   item_count: number | null
   event_count: number | null
   run_at: string | null
+  rerank_query?: string | null
+  processed_items?: any[]
 }
 
 export interface SourceRunsResult {

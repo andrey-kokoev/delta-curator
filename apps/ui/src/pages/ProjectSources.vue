@@ -156,9 +156,37 @@
             <li
               v-for="run in sourceRuns[source.id]"
               :key="run.commit_id"
-              class="rounded bg-muted/60 px-2 py-1"
+              class="rounded bg-muted/60 px-2 py-1 cursor-pointer hover:bg-muted/80 transition-colors"
+              @click="toggleRunExpand(run.commit_id)"
             >
-              {{ formatRunTime(run.run_at) }} · items {{ formatRunMetric(run.item_count, 'items') }} · events {{ formatRunMetric(run.event_count, 'events') }}
+              <div class="flex items-center justify-between">
+                <span>{{ formatRunTime(run.run_at) }} · items {{ formatRunMetric(run.item_count, 'items') }} · events {{ formatRunMetric(run.event_count, 'events') }}</span>
+                <span class="text-muted-foreground ml-2 shrink-0">{{ expandedRuns.has(run.commit_id) ? '▼' : '▶' }}</span>
+              </div>
+              <div v-if="expandedRuns.has(run.commit_id)" class="mt-2 text-xs space-y-1 cursor-default text-foreground" @click.stop>
+                <p v-if="run.rerank_query" class="text-muted-foreground truncate">
+                  reranker query: {{ run.rerank_query }}
+                </p>
+                <ul v-if="(run.processed_items || []).length" class="max-h-40 overflow-auto space-y-1">
+                  <li
+                    v-for="item in (run.processed_items || [])"
+                    :key="item.source_item_id"
+                    class="rounded bg-background px-2 py-1 border border-border/50"
+                  >
+                    <p class="truncate">{{ item.title || item.source_item_id }}</p>
+                    <p class="truncate text-muted-foreground">{{ item.url || item.source_item_id }}</p>
+                    <p class="truncate text-muted-foreground">
+                      {{ item.outcome || 'pending' }}
+                      <span v-if="item.outcome === 'skipped_low_rank' && item.rank_score != null">
+                        (rank: {{ Number(item.rank_score).toFixed(3) }})
+                      </span>
+                    </p>
+                  </li>
+                </ul>
+                <div v-else class="text-muted-foreground italic mt-1">
+                  No detailed item records found for this run.
+                </div>
+              </div>
             </li>
           </ul>
         </div>
@@ -196,7 +224,18 @@ const lastRunBySource = ref<Record<string, RunResult>>({})
 const cursorInputs = ref<Record<string, string>>({})
 const updatingSourceId = ref<string | null>(null)
 const runningSourceId = ref<string | null>(null)
+const expandedRuns = ref(new Set<string>())
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function toggleRunExpand(commitId: string) {
+  const newSet = new Set(expandedRuns.value)
+  if (newSet.has(commitId)) {
+    newSet.delete(commitId)
+  } else {
+    newSet.add(commitId)
+  }
+  expandedRuns.value = newSet
+}
 
 function isoToDatetimeLocal(value: string | null): string {
   if (!value) return ''

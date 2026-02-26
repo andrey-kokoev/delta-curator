@@ -603,6 +603,23 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
     }
   }
 
+  if (!commitColumns.has('processed_items')) {
+    try {
+      await env.DB.prepare('ALTER TABLE commits ADD COLUMN processed_items TEXT').run()
+    } catch (err) {
+      const message = String(err)
+      if (!message.includes('duplicate column name')) throw err
+    }
+  }
+
+  if (!commitColumns.has('rerank_query')) {
+    try {
+      await env.DB.prepare('ALTER TABLE commits ADD COLUMN rerank_query TEXT').run()
+    } catch (err) {
+      const message = String(err)
+      if (!message.includes('duplicate column name')) throw err
+    }
+  }
   await env.DB.prepare(
     'CREATE INDEX IF NOT EXISTS idx_commits_project_source ON commits(project_id, source_id)'
   ).run()
@@ -817,7 +834,9 @@ async function ensureCursorCommit(
   oldState: unknown,
   newState: unknown,
   now: string,
-  itemIds: string[]
+  itemIds: string[],
+  processedItemsJson?: string | null,
+  rerankQuery?: string | null
 ): Promise<{ commitId: string; commitKey: string }> {
   const oldStateJson = JSON.stringify(oldState ?? {})
   const newStateJson = JSON.stringify(newState ?? {})
@@ -840,20 +859,21 @@ async function ensureCursorCommit(
 
     const commitId = crypto.randomUUID()
     if (commitColumns.has('project_id')) {
-      await env.DB.prepare(
-        `INSERT INTO commits
-         (commit_id, commit_key, trace_id, source_id, project_id, old_state, new_state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        commitId,
-        commitKey,
-        traceId,
-        sourceId,
-        projectId,
-        oldStateJson,
-        newStateJson,
-        now
-      ).run()
+      const cols = ['commit_id', 'commit_key', 'trace_id', 'source_id', 'project_id', 'old_state', 'new_state', 'created_at']
+      const vals: any[] = [commitId, commitKey, traceId, sourceId, projectId, oldStateJson, newStateJson, now]
+
+      if (commitColumns.has('processed_items')) {
+        cols.push('processed_items')
+        vals.push(processedItemsJson || null)
+      }
+      if (commitColumns.has('rerank_query')) {
+        cols.push('rerank_query')
+        vals.push(rerankQuery || null)
+      }
+
+      const placeholders = cols.map(() => '?').join(', ')
+      await env.DB.prepare(`INSERT INTO commits (${cols.join(', ')}) VALUES (${placeholders})`)
+        .bind(...vals).run()
     } else {
       await env.DB.prepare(
         `INSERT INTO commits
@@ -876,20 +896,21 @@ async function ensureCursorCommit(
   const commitId = crypto.randomUUID()
   if (commitColumns.has('source_state')) {
     if (commitColumns.has('project_id')) {
-      await env.DB.prepare(
-        `INSERT INTO commits
-         (commit_id, trace_id, source_id, project_id, source_state, item_count, event_count, committed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(
-        commitId,
-        traceId,
-        sourceId,
-        projectId,
-        newStateJson,
-        itemIds.length,
-        0,
-        now
-      ).run()
+      const cols = ['commit_id', 'trace_id', 'source_id', 'project_id', 'source_state', 'item_count', 'event_count', 'committed_at']
+      const vals: any[] = [commitId, traceId, sourceId, projectId, newStateJson, itemIds.length, 0, now]
+
+      if (commitColumns.has('processed_items')) {
+        cols.push('processed_items')
+        vals.push(processedItemsJson || null)
+      }
+      if (commitColumns.has('rerank_query')) {
+        cols.push('rerank_query')
+        vals.push(rerankQuery || null)
+      }
+
+      const placeholders = cols.map(() => '?').join(', ')
+      await env.DB.prepare(`INSERT INTO commits (${cols.join(', ')}) VALUES (${placeholders})`)
+        .bind(...vals).run()
     } else {
       await env.DB.prepare(
         `INSERT INTO commits
@@ -2218,20 +2239,23 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     // Create commit record first (events has FK -> commits)
     if (commitColumns.has('source_state')) {
       if (commitColumns.has('project_id')) {
-        await env.DB.prepare(
-          `INSERT INTO commits
-           (commit_id, trace_id, source_id, project_id, source_state, item_count, event_count, committed_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(
-          commitId,
-          traceId,
-          sourceConfig.id,
-          config.project_id,
-          newStateJson,
-          items.length,
-          events.length,
-          now
-        ).run()
+        const cols = ['commit_id', 'trace_id', 'source_id', 'project_id', 'source_state', 'item_count', 'event_count', 'committed_at']
+        const vals: any[] = [commitId, traceId, sourceConfig.id, config.project_id, newStateJson, items.length, events.length, now]
+
+        if (commitColumns.has('processed_items')) {
+          cols.push('processed_items')
+          // omit large rerank_input strings
+          const itemsToSave = processedItems.map(p => ({ ...p, rerank_input: undefined }))
+          vals.push(JSON.stringify(itemsToSave))
+        }
+        if (commitColumns.has('rerank_query')) {
+          cols.push('rerank_query')
+          vals.push(rankingEnabled && rankingQuery ? rankingQuery : null)
+        }
+
+        const placeholders = cols.map(() => '?').join(', ')
+        await env.DB.prepare(`INSERT INTO commits (${cols.join(', ')}) VALUES (${placeholders})`)
+          .bind(...vals).run()
       } else {
         await env.DB.prepare(
           `INSERT INTO commits
@@ -3010,6 +3034,9 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
       ? 'AND c.project_id = ?'
       : ''
 
+    const processedItemsExpression = commitColumns.has('processed_items') ? 'c.processed_items' : 'NULL'
+    const rerankQueryExpression = commitColumns.has('rerank_query') ? 'c.rerank_query' : 'NULL'
+
     const placeholders = allowedSourceIds.map(() => '?').join(', ')
     const query = `
       SELECT
@@ -3018,6 +3045,8 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
         c.source_id,
         ${itemCountExpression} AS item_count,
         ${eventCountExpression} AS event_count,
+        ${processedItemsExpression} AS processed_items,
+        ${rerankQueryExpression} AS rerank_query,
         ${runAtExpression} AS run_at
       FROM commits c
       WHERE c.source_id IN (${placeholders})
@@ -3033,17 +3062,32 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
         source_id: string
         item_count: number | null
         event_count: number | null
+        processed_items: string | null
+        rerank_query: string | null
         run_at: string | null
       }>()
 
-    const runs = (results || []).map((row) => ({
-      commit_id: row.commit_id,
-      trace_id: row.trace_id,
-      source_id: row.source_id,
-      item_count: typeof row.item_count === 'number' ? row.item_count : null,
-      event_count: typeof row.event_count === 'number' ? row.event_count : null,
-      run_at: row.run_at
-    }))
+    const runs = (results || []).map((row) => {
+      let parsedItems = undefined
+      if (typeof row.processed_items === 'string') {
+        try {
+          parsedItems = JSON.parse(row.processed_items)
+        } catch {
+          // ignore parsing error
+        }
+      }
+
+      return {
+        commit_id: row.commit_id,
+        trace_id: row.trace_id,
+        source_id: row.source_id,
+        item_count: typeof row.item_count === 'number' ? row.item_count : null,
+        event_count: typeof row.event_count === 'number' ? row.event_count : null,
+        processed_items: parsedItems,
+        rerank_query: row.rerank_query,
+        run_at: row.run_at
+      }
+    })
 
     return new Response(JSON.stringify({
       project_id: projectId,
@@ -3102,7 +3146,9 @@ CREATE TABLE IF NOT EXISTS commits (
   source_state TEXT NOT NULL,
   item_count INTEGER NOT NULL DEFAULT 0,
   event_count INTEGER NOT NULL DEFAULT 0,
-  committed_at TEXT NOT NULL
+  committed_at TEXT NOT NULL,
+  processed_items TEXT,
+  rerank_query TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_commits_source_trace ON commits(source_id, trace_id);
 CREATE INDEX IF NOT EXISTS idx_commits_time ON commits(committed_at);
