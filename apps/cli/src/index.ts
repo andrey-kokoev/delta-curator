@@ -36,11 +36,6 @@ async function main() {
     return;
   }
 
-  if (args.values.version) {
-    console.log(`delta-curator v${PKG_VERSION}`);
-    return;
-  }
-
   // Default paths
   const workDir = args.values.dir || '.delta';
   const dbPath = args.values.db || path.join(workDir, 'db.sqlite');
