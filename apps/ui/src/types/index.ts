@@ -129,6 +129,18 @@ export interface RunResult {
   items_processed: number
   events_written: number
   trace_id?: string
+  rerank_query?: string | null
+  processed_items?: {
+    source_item_id: string
+    title?: string | null
+    url?: string | null
+    outcome?: 'pending' | 'event_created' | 'skipped_existing' | 'skipped_low_rank' | 'skipped_decision' | 'skipped_already_processed_url'
+    decision?: string | null
+    decision_reason?: string | null
+    rank_score?: number | null
+    rerank_query?: string | null
+    rerank_input?: string | null
+  }[]
 }
 
 export interface InspectSourceCursor {

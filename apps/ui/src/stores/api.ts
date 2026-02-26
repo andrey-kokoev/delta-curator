@@ -128,6 +128,24 @@ export const useApiStore = defineStore('api', () => {
     })
   }
 
+  async function resetProcessedUrls(
+    sourceId: string,
+    projectId?: string
+  ): Promise<{
+    success: boolean
+    project_id: string
+    source_id: string
+    deleted_count: number
+  }> {
+    return fetchApi('/sources/processed-urls/reset', {
+      method: 'POST',
+      body: JSON.stringify({
+        source_id: sourceId,
+        project_id: projectId
+      })
+    })
+  }
+
   async function search(query: string, k = 20, rerank = true): Promise<SearchResult> {
     return fetchApi(`/search?q=${encodeURIComponent(query)}&k=${k}&rerank=${rerank}`)
   }
@@ -240,6 +258,7 @@ export const useApiStore = defineStore('api', () => {
     deleteConfig,
     runBatch,
     updateSourceCursor,
+    resetProcessedUrls,
     search,
     searchScoped,
     listContent,

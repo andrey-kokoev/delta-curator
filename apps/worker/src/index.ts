@@ -542,6 +542,53 @@ async function getTableColumns(env: Env, table: 'commits' | 'source_state' | 'cu
   return new Set((results ?? []).map((row) => row.name));
 }
 
+async function ensureProcessedUrlsSchema(env: Env): Promise<void> {
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS processed_urls (
+      project_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      target_url TEXT NOT NULL,
+      first_seen_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, source_id, target_url)
+    )`
+  ).run();
+
+  await env.DB.prepare(
+    'CREATE INDEX IF NOT EXISTS idx_processed_urls_first_seen ON processed_urls(first_seen_at)'
+  ).run();
+}
+
+function canonicalizeTargetUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  try {
+    const url = new URL(trimmed);
+    url.hash = '';
+    if ((url.protocol === 'https:' && url.port === '443') || (url.protocol === 'http:' && url.port === '80')) {
+      url.port = '';
+    }
+    if (url.pathname.length > 1 && url.pathname.endsWith('/')) {
+      url.pathname = url.pathname.slice(0, -1);
+    }
+    return url.toString();
+  } catch {
+    return trimmed;
+  }
+}
+
+function extractTargetUrl(payload: unknown): string | null {
+  const doc = (payload ?? {}) as Record<string, unknown>;
+  const raw = typeof doc.link === 'string'
+    ? doc.link
+    : typeof doc.url === 'string'
+      ? doc.url
+      : null;
+
+  if (!raw) return null;
+  return canonicalizeTargetUrl(raw);
+}
+
 async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
   const commitColumns = await getTableColumns(env, 'commits');
 
@@ -1403,6 +1450,92 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
   }
 }
 
+async function handleSourceProcessedUrlsResetRoute(env: Env, request: Request): Promise<Response> {
+  const hasAdminAccess = await isAdminRequest(request, env);
+  const session = await getSession(request, env);
+  const hasSessionAccess = Boolean(session?.user);
+
+  if (!hasAdminAccess && !hasSessionAccess) {
+    return new Response(JSON.stringify({ error: 'Authentication required' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+
+  try {
+    const body = await request.json() as {
+      project_id?: string;
+      source_id?: string;
+    };
+
+    const sourceId = (body.source_id || '').trim();
+    if (!sourceId) {
+      return new Response(JSON.stringify({ error: 'source_id is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const projectId = (body.project_id || '').trim();
+    if (!projectId) {
+      return new Response(JSON.stringify({ error: 'project_id is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const configResult = await readConfig(env, projectId);
+    if (configResult.error || !configResult.config) {
+      return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    const sourceExists = configResult.config.sources.some((source) => source.id === sourceId);
+    if (!sourceExists) {
+      return new Response(JSON.stringify({
+        error: `Unknown source_id: ${sourceId}`,
+        available_sources: configResult.config.sources.map((source) => source.id)
+      }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+
+    await ensureProcessedUrlsSchema(env);
+
+    const existing = await env.DB.prepare(
+      `SELECT COUNT(*) AS total
+       FROM processed_urls
+       WHERE project_id = ? AND source_id = ?`
+    ).bind(projectId, sourceId).first<{ total: number | string }>();
+
+    const deletedCount = typeof existing?.total === 'number'
+      ? existing.total
+      : Number(existing?.total || 0);
+
+    await env.DB.prepare(
+      `DELETE FROM processed_urls
+       WHERE project_id = ? AND source_id = ?`
+    ).bind(projectId, sourceId).run();
+
+    return new Response(JSON.stringify({
+      success: true,
+      project_id: projectId,
+      source_id: sourceId,
+      deleted_count: deletedCount
+    }), {
+      headers: { 'Content-Type': 'application/json' }
+    });
+  } catch (err: any) {
+    return new Response(JSON.stringify({ error: err?.message || String(err) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
 async function handleConfigActiveRoute(env: Env): Promise<Response> {
   const result = await getActiveConfig(env);
   
@@ -1671,6 +1804,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
   
   try {
     await ensureCommitsProjectScopeSchema(env);
+    await ensureProcessedUrlsSchema(env);
     const commitColumns = await getTableColumns(env, 'commits');
     const sourceStateColumns = await getTableColumns(env, 'source_state');
     const curatedDocColumns = await getTableColumns(env, 'curated_docs');
@@ -1700,6 +1834,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         trace_id: traceId,
         items_processed: 0,
         events_written: 0,
+        processed_items: [],
         message: 'No new items to process'
       }), {
         headers: { 'Content-Type': 'application/json' }
@@ -1707,6 +1842,21 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     }
     
     const items = batchResult.items;
+    const processedItems = items.map((item) => {
+      const payload = (item.payload || {}) as Record<string, unknown>;
+      const targetUrl = extractTargetUrl(item.payload);
+      return {
+        source_item_id: item.source_item_id,
+        title: typeof payload.title === 'string' ? payload.title : null,
+        url: targetUrl,
+        outcome: 'pending' as 'pending' | 'event_created' | 'skipped_existing' | 'skipped_low_rank' | 'skipped_decision' | 'skipped_already_processed_url',
+        decision: null as string | null,
+        decision_reason: null as string | null,
+        rank_score: null as number | null,
+        rerank_query: null as string | null,
+        rerank_input: null as string | null
+      };
+    });
     rssMetrics = extractRssSummaryMetrics(pluginType, batchResult as { items: unknown[]; newState: unknown; diagnostics?: unknown });
     cursorBefore = typeof (sourceState as Record<string, unknown>)?.cursorPublishedAt === 'string'
       ? (sourceState as Record<string, unknown>).cursorPublishedAt as string
@@ -1733,6 +1883,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     const rankingThreshold = 0.2;
     const rankScoresByItem = new Map<string, number>();
     let rankingApplied = false;
+
+    if (rankingEnabled && rankingQuery) {
+      for (let i = 0; i < items.length; i++) {
+        processedItems[i].rerank_query = rankingQuery;
+        processedItems[i].rerank_input = buildRerankPassage(items[i].payload, rankingMaxPassageChars);
+      }
+    }
 
     rankingEnabledForRun = rankingEnabled;
     rankingQueryPresentForRun = Boolean(rankingQuery);
@@ -1811,6 +1968,38 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const payload = item.payload as Record<string, unknown>;
+      const targetUrl = processedItems[i].url;
+
+      if (targetUrl) {
+        const alreadyProcessedUrl = await env.DB.prepare(
+          `SELECT 1
+           FROM processed_urls
+           WHERE project_id = ? AND source_id = ? AND target_url = ?
+           LIMIT 1`
+        ).bind(config.project_id, sourceConfig.id, targetUrl).first();
+
+        if (alreadyProcessedUrl) {
+          processedItems[i].outcome = 'skipped_already_processed_url';
+          if (shouldLogLoopIteration(i, items.length)) {
+            logRun('run.loop.iteration', {
+              project_id: config.project_id,
+              source_id: sourceConfig.id,
+              index: i,
+              total_items: items.length,
+              source_item_id: item.source_item_id,
+              outcome: 'skipped_already_processed_url',
+              target_url: targetUrl
+            });
+          }
+          continue;
+        }
+
+        await env.DB.prepare(
+          `INSERT INTO processed_urls (project_id, source_id, target_url, first_seen_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(project_id, source_id, target_url) DO NOTHING`
+        ).bind(config.project_id, sourceConfig.id, targetUrl, now).run();
+      }
       
       // Generate event ID (simplified - should use proper dual-hash)
       const eventId = await sha256Base64(`${item.source_item_id}:${canonicalJson(payload)}`);
@@ -1821,6 +2010,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       ).bind(eventId).first();
       
       if (existing) {
+        processedItems[i].outcome = 'skipped_existing';
         skippedExisting += 1;
         if (shouldLogLoopIteration(i, items.length)) {
           logRun('run.loop.iteration', {
@@ -1838,6 +2028,8 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       if (rankingApplied) {
         const rankScore = rankScoresByItem.get(item.source_item_id) ?? 0;
         if (rankScore < rankingThreshold) {
+          processedItems[i].outcome = 'skipped_low_rank';
+          processedItems[i].rank_score = rankScore;
           skippedLowRank += 1;
           if (shouldLogLoopIteration(i, items.length)) {
             logRun('run.loop.iteration', {
@@ -1882,6 +2074,9 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       
       // Only process if append (accept)
       if (decision.decision !== 'append') {
+        processedItems[i].outcome = 'skipped_decision';
+        processedItems[i].decision = decision.decision;
+        processedItems[i].decision_reason = decision.reason || null;
         skippedByDecision += 1;
         if (shouldLogLoopIteration(i, items.length)) {
           logRun('run.loop.iteration', {
@@ -1914,6 +2109,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       };
       
       events.push(event);
+      processedItems[i].outcome = 'event_created';
 
       if (shouldLogLoopIteration(i, items.length)) {
         logRun('run.loop.iteration', {
@@ -2004,6 +2200,8 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         trace_id: traceId,
         items_processed: items.length,
         events_written: 0,
+        processed_items: processedItems,
+        rerank_query: rankingEnabled && rankingQuery ? rankingQuery : null,
         message: 'No novel items to commit'
       }), {
         headers: { 'Content-Type': 'application/json' }
@@ -2233,6 +2431,8 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       trace_id: traceId,
       items_processed: items.length,
       events_written: events.length,
+      processed_items: processedItems,
+      rerank_query: rankingEnabled && rankingQuery ? rankingQuery : null,
       project_id: config.project_id,
       source_id: sourceConfig.id,
       took_ms: Date.now() - startTime
@@ -2965,6 +3165,15 @@ CREATE TABLE IF NOT EXISTS hold_index (
 );
 CREATE INDEX IF NOT EXISTS idx_hold_source_item ON hold_index(source_item_id);
 
+CREATE TABLE IF NOT EXISTS processed_urls (
+  project_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  target_url TEXT NOT NULL,
+  first_seen_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, source_id, target_url)
+);
+CREATE INDEX IF NOT EXISTS idx_processed_urls_first_seen ON processed_urls(first_seen_at);
+
 CREATE TABLE IF NOT EXISTS curated_docs (
   doc_id TEXT PRIMARY KEY,
   event_id TEXT NOT NULL,
@@ -3017,6 +3226,7 @@ async function handleInit(env: Env): Promise<Response> {
     }
 
     await ensureCommitsProjectScopeSchema(env);
+    await ensureProcessedUrlsSchema(env);
     
     return new Response(JSON.stringify({ success: true, message: 'Database initialized' }), {
       headers: { 'Content-Type': 'application/json' }
@@ -3084,6 +3294,10 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 
   if (pathname === '/sources/cursor' && method === 'POST') {
     return handleSourceCursorUpdateRoute(env, request);
+  }
+
+  if (pathname === '/sources/processed-urls/reset' && method === 'POST') {
+    return handleSourceProcessedUrlsResetRoute(env, request);
   }
   
   if (pathname.startsWith('/config/') && pathname.includes('/activate') && method === 'POST') {

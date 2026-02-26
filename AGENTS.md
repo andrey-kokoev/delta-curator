@@ -56,6 +56,7 @@ The following now require explicit `project_id`:
 - `GET /inspect` query requires `project_id`
 - `GET /search` query requires `project_id`
 - `POST /sources/cursor` body requires `project_id` and authentication
+- `POST /sources/processed-urls/reset` body requires `project_id`, `source_id`, and authentication
 
 Project-scoped operation endpoints intentionally no longer rely on implicit active-project fallback.
 
@@ -74,6 +75,7 @@ Per-source pause is implemented via:
 ### Cursor management
 
 - Cursor updates are supported via `POST /sources/cursor`
+- Processed URL dedupe memory reset is supported via `POST /sources/processed-urls/reset`
 - Inspect route returns per-source cursor metadata
 - Inspect UI supports set/clear cursor controls
 
