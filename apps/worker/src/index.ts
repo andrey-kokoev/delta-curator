@@ -57,14 +57,30 @@ function handleCors(request: Request, env: Env): Response {
 }
 
 function addCorsHeaders(response: Response, request: Request, env: Env): Response {
-  const origin = request.headers.get('Origin') || '*'
-  const allowedOrigins = env.UI_URL ? [env.UI_URL] : ['*']
-  const allowOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin)
-    ? origin : allowedOrigins[0]
-
   const headers = new Headers(response.headers)
-  headers.set('Access-Control-Allow-Origin', allowOrigin)
-  headers.set('Access-Control-Allow-Credentials', 'true')
+
+  const origin = request.headers.get('Origin')
+
+  // Allow same-origin requests (no CORS headers needed)
+  if (!origin) {
+    return response
+  }
+
+  const requestUrl = new URL(request.url)
+  const originUrl = new URL(origin)
+
+  // If same origin, no CORS headers needed
+  if (originUrl.origin === requestUrl.origin) {
+    return response
+  }
+
+  // For external origins (e.g., local development)
+  const allowedOrigins = env.UI_URL ? [env.UI_URL] : ['http://localhost:5173']
+
+  if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+    headers.set('Access-Control-Allow-Origin', origin)
+    headers.set('Access-Control-Allow-Credentials', 'true')
+  }
 
   return new Response(response.body, {
     status: response.status,
@@ -3290,6 +3306,26 @@ async function handleInit(env: Env): Promise<Response> {
 }
 
 // ============================================================================
+// Security Headers
+// ============================================================================
+
+function addSecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers)
+
+  // Apply security headers from apps/ui/_headers
+  headers.set('X-Frame-Options', 'DENY')
+  headers.set('X-Content-Type-Options', 'nosniff')
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  })
+}
+
+// ============================================================================
 // Main Router
 // ============================================================================
 
@@ -3396,10 +3432,41 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return handleHealthRoute(env)
   }
 
-  return new Response(JSON.stringify({ error: 'Not found' }), {
-    status: 404,
-    headers: { 'Content-Type': 'application/json' }
+  // ============================================================================
+  // Static Assets (Priority 2: Serve static files)
+  // ============================================================================
+
+  // Try to serve the static asset from Workers Assets
+  // This handles /assets/*, /favicon.ico, etc.
+  const assetResponse = await env.ASSETS.fetch(request)
+
+  // If asset exists, return it with security headers
+  if (assetResponse.status === 200) {
+    return addSecurityHeaders(assetResponse)
+  }
+
+  // ============================================================================
+  // SPA Fallback (Priority 3: All other routes serve index.html)
+  // ============================================================================
+
+  // For any route that doesn't match API or static assets,
+  // serve index.html to support client-side routing
+  const indexUrl = new URL(request.url)
+  indexUrl.pathname = '/'
+  const indexRequest = new Request(indexUrl, request)
+  const indexResponse = await env.ASSETS.fetch(indexRequest)
+
+  // Ensure index.html is not cached (for SPA routing)
+  const headers = new Headers(indexResponse.headers)
+  headers.set('Cache-Control', 'no-cache, must-revalidate')
+
+  const spaResponse = new Response(indexResponse.body, {
+    status: indexResponse.status,
+    statusText: indexResponse.statusText,
+    headers
   })
+
+  return addSecurityHeaders(spaResponse)
 }
 
 // ============================================================================

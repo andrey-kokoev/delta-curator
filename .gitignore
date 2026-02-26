@@ -48,3 +48,6 @@ artifacts/
 apps/worker/.dev.vars
 
 .wrangler
+
+# Worker static assets (copied from UI build)
+apps/worker/public/

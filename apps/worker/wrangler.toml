@@ -20,6 +20,10 @@ binding = "AI"
 # binding = "AI_SEARCH"
 # index = "delta-curator-idx"
 
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
 [triggers]
 crons = ["0 8 * * *"]
 
@@ -28,5 +32,5 @@ crons = ["0 8 * * *"]
 # - AUTH_MICROSOFT_CLIENT_ID: Azure AD app client ID
 # - AUTH_MICROSOFT_CLIENT_SECRET: Azure AD app client secret
 # - AUTH_MICROSOFT_TENANT_ID: Azure AD tenant ID (or 'common')
-# - UI_URL: URL of the Cloudflare Pages deployment (for CORS)
 # - ADMIN_TOKEN: Bearer token for admin access (e.g., 'admin-secret-token-123')
+# - UI_URL: (Optional) URL for CORS during local development (e.g., 'http://localhost:5173')

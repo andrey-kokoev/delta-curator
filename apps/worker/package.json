@@ -6,8 +6,11 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "prebuild": "rm -rf public && mkdir -p public && cp -r ../ui/dist/* public/",
     "build": "tsc",
+    "predeploy": "pnpm run prebuild",
+    "deploy": "wrangler deploy",
+    "preview": "pnpm run prebuild && wrangler dev",
     "test": "vitest run"
   },
   "dependencies": {

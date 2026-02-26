@@ -14,17 +14,18 @@ export interface Env {
   DB: D1Database;
   ARTIFACTS: R2Bucket;
   AI: Ai;
+  ASSETS: Fetcher;
   LOG_VERBOSE?: string;
-  
+
   // Auth
   AUTH_SECRET: string;
   AUTH_MICROSOFT_CLIENT_ID: string;
   AUTH_MICROSOFT_CLIENT_SECRET: string;
   AUTH_MICROSOFT_TENANT_ID: string;
-  
-  // CORS
-  UI_URL: string;
-  
+
+  // CORS (optional after migration to same-origin)
+  UI_URL?: string;
+
   // Admin token for Bearer auth
   ADMIN_TOKEN: string;
 }
