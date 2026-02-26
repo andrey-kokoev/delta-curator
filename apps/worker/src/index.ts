@@ -3,35 +3,35 @@
  * Cloudflare Workers entrypoint with complete API handlers
  */
 
-import type { Env } from './env';
-import type { ProjectConfig, ProjectConfigIndex } from '@delta-curator/protocol';
-import { WorkersAIRanker } from '@delta-curator/plugin-ranker-workers-ai';
-import { RSSSource } from './sources/rss';
-import { FingerprintComparator, RulesDecider, SimpleMerger } from './plugins';
+import type { Env } from './env'
+import type { ProjectConfig, ProjectConfigIndex } from '@delta-curator/protocol'
+import { WorkersAIRanker } from '@delta-curator/plugin-ranker-workers-ai'
+import { RSSSource } from './sources/rss'
+import { FingerprintComparator, RulesDecider, SimpleMerger } from './plugins'
 
 // ============================================================================
 // Types
 // ============================================================================
 
 interface User {
-  id: string;
-  email: string;
-  name: string;
-  avatar?: string;
-  roles: string[];
+  id: string
+  email: string
+  name: string
+  avatar?: string
+  roles: string[]
 }
 
 interface Session {
-  user: User;
-  expiresAt: number;
+  user: User
+  expiresAt: number
 }
 
 interface ConfigWriteResult {
-  success: boolean;
-  projectId?: string;
-  r2Key?: string;
-  hash?: string;
-  error?: string;
+  success: boolean
+  projectId?: string
+  r2Key?: string
+  hash?: string
+  error?: string
 }
 
 // ============================================================================
@@ -39,11 +39,11 @@ interface ConfigWriteResult {
 // ============================================================================
 
 function handleCors(request: Request, env: Env): Response {
-  const origin = request.headers.get('Origin') || '*';
-  const allowedOrigins = env.UI_URL ? [env.UI_URL] : ['*'];
-  const allowOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin) 
-    ? origin : allowedOrigins[0];
-  
+  const origin = request.headers.get('Origin') || '*'
+  const allowedOrigins = env.UI_URL ? [env.UI_URL] : ['*']
+  const allowOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin)
+    ? origin : allowedOrigins[0]
+
   return new Response(null, {
     status: 204,
     headers: {
@@ -53,111 +53,111 @@ function handleCors(request: Request, env: Env): Response {
       'Access-Control-Allow-Credentials': 'true',
       'Access-Control-Max-Age': '86400'
     }
-  });
+  })
 }
 
 function addCorsHeaders(response: Response, request: Request, env: Env): Response {
-  const origin = request.headers.get('Origin') || '*';
-  const allowedOrigins = env.UI_URL ? [env.UI_URL] : ['*'];
-  const allowOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin) 
-    ? origin : allowedOrigins[0];
-  
-  const headers = new Headers(response.headers);
-  headers.set('Access-Control-Allow-Origin', allowOrigin);
-  headers.set('Access-Control-Allow-Credentials', 'true');
-  
+  const origin = request.headers.get('Origin') || '*'
+  const allowedOrigins = env.UI_URL ? [env.UI_URL] : ['*']
+  const allowOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin)
+    ? origin : allowedOrigins[0]
+
+  const headers = new Headers(response.headers)
+  headers.set('Access-Control-Allow-Origin', allowOrigin)
+  headers.set('Access-Control-Allow-Credentials', 'true')
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers
-  });
+  })
 }
 
 // ============================================================================
 // Auth - Session Management
 // ============================================================================
 
-const SESSION_COOKIE = 'dc_session';
-const OAUTH_STATE_COOKIE = 'dc_oauth_state';
+const SESSION_COOKIE = 'dc_session'
+const OAUTH_STATE_COOKIE = 'dc_oauth_state'
 
 async function signSession(session: Session, secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(JSON.stringify(session));
-  
+  const encoder = new TextEncoder()
+  const data = encoder.encode(JSON.stringify(session))
+
   const key = await crypto.subtle.importKey(
     'raw',
     encoder.encode(secret),
     { name: 'HMAC', hash: 'SHA-256' },
     false,
     ['sign']
-  );
-  
-  const signature = await crypto.subtle.sign('HMAC', key, data);
-  const payload = btoa(JSON.stringify(session));
-  const sig = btoa(String.fromCharCode(...new Uint8Array(signature)));
-  
-  return `${payload}.${sig}`;
+  )
+
+  const signature = await crypto.subtle.sign('HMAC', key, data)
+  const payload = btoa(JSON.stringify(session))
+  const sig = btoa(String.fromCharCode(...new Uint8Array(signature)))
+
+  return `${payload}.${sig}`
 }
 
 async function verifySession(token: string, secret: string): Promise<Session | null> {
   try {
-    const [payloadB64, sigB64] = token.split('.');
-    if (!payloadB64 || !sigB64) return null;
-    
-    const payload = JSON.parse(atob(payloadB64)) as Session;
-    if (payload.expiresAt < Date.now()) return null;
-    
-    const encoder = new TextEncoder();
+    const [payloadB64, sigB64] = token.split('.')
+    if (!payloadB64 || !sigB64) return null
+
+    const payload = JSON.parse(atob(payloadB64)) as Session
+    if (payload.expiresAt < Date.now()) return null
+
+    const encoder = new TextEncoder()
     const key = await crypto.subtle.importKey(
       'raw',
       encoder.encode(secret),
       { name: 'HMAC', hash: 'SHA-256' },
       false,
       ['verify']
-    );
-    
-    const signature = Uint8Array.from(atob(sigB64), c => c.charCodeAt(0));
-    const data = encoder.encode(JSON.stringify(payload));
-    
-    const valid = await crypto.subtle.verify('HMAC', key, signature, data);
-    if (!valid) return null;
-    
-    return payload;
+    )
+
+    const signature = Uint8Array.from(atob(sigB64), c => c.charCodeAt(0))
+    const data = encoder.encode(JSON.stringify(payload))
+
+    const valid = await crypto.subtle.verify('HMAC', key, signature, data)
+    if (!valid) return null
+
+    return payload
   } catch {
-    return null;
+    return null
   }
 }
 
 async function getSession(request: Request, env: Env): Promise<Session | null> {
-  const cookie = request.headers.get('Cookie');
-  if (!cookie) return null;
-  
-  const match = cookie.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`));
-  if (!match) return null;
-  
-  return verifySession(match[1], env.AUTH_SECRET);
+  const cookie = request.headers.get('Cookie')
+  if (!cookie) return null
+
+  const match = cookie.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`))
+  if (!match) return null
+
+  return verifySession(match[1], env.AUTH_SECRET)
 }
 
 function setSessionCookie(response: Response, token: string): Response {
-  const headers = new Headers(response.headers);
-  headers.set('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=86400`);
-  
+  const headers = new Headers(response.headers)
+  headers.set('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=86400`)
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers
-  });
+  })
 }
 
 function clearSessionCookie(response: Response): Response {
-  const headers = new Headers(response.headers);
-  headers.set('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`);
-  
+  const headers = new Headers(response.headers)
+  headers.set('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`)
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers
-  });
+  })
 }
 
 // ============================================================================
@@ -165,56 +165,56 @@ function clearSessionCookie(response: Response): Response {
 // ============================================================================
 
 function generateState(): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('');
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, '0')).join('')
 }
 
 async function handleMicrosoftLogin(request: Request, env: Env): Promise<Response> {
-  const state = generateState();
-  const redirectUri = new URL(request.url).origin + '/api/auth/microsoft/callback';
-  
-  const authUrl = new URL(`https://login.microsoftonline.com/${env.AUTH_MICROSOFT_TENANT_ID}/oauth2/v2.0/authorize`);
-  authUrl.searchParams.set('client_id', env.AUTH_MICROSOFT_CLIENT_ID);
-  authUrl.searchParams.set('response_type', 'code');
-  authUrl.searchParams.set('redirect_uri', redirectUri);
-  authUrl.searchParams.set('scope', 'openid profile email');
-  authUrl.searchParams.set('state', state);
-  
+  const state = generateState()
+  const redirectUri = new URL(request.url).origin + '/api/auth/microsoft/callback'
+
+  const authUrl = new URL(`https://login.microsoftonline.com/${env.AUTH_MICROSOFT_TENANT_ID}/oauth2/v2.0/authorize`)
+  authUrl.searchParams.set('client_id', env.AUTH_MICROSOFT_CLIENT_ID)
+  authUrl.searchParams.set('response_type', 'code')
+  authUrl.searchParams.set('redirect_uri', redirectUri)
+  authUrl.searchParams.set('scope', 'openid profile email')
+  authUrl.searchParams.set('state', state)
+
   return new Response(null, {
     status: 302,
     headers: {
       'Location': authUrl.toString(),
       'Set-Cookie': `${OAUTH_STATE_COOKIE}=${state}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=600`
     }
-  });
+  })
 }
 
 async function handleMicrosoftCallback(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const code = url.searchParams.get('code');
-  const state = url.searchParams.get('state');
-  
+  const url = new URL(request.url)
+  const code = url.searchParams.get('code')
+  const state = url.searchParams.get('state')
+
   // Verify state
-  const cookie = request.headers.get('Cookie') || '';
-  const stateMatch = cookie.match(new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`));
-  const savedState = stateMatch ? stateMatch[1] : null;
-  
+  const cookie = request.headers.get('Cookie') || ''
+  const stateMatch = cookie.match(new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`))
+  const savedState = stateMatch ? stateMatch[1] : null
+
   if (!state || state !== savedState) {
     return new Response(JSON.stringify({ error: 'Invalid state' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
+
   if (!code) {
     return new Response(JSON.stringify({ error: 'No code provided' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
+
   try {
     // Exchange code for token
-    const redirectUri = url.origin + '/api/auth/microsoft/callback';
+    const redirectUri = url.origin + '/api/auth/microsoft/callback'
     const tokenResponse = await fetch(
       `https://login.microsoftonline.com/${env.AUTH_MICROSOFT_TENANT_ID}/oauth2/v2.0/token`,
       {
@@ -228,72 +228,72 @@ async function handleMicrosoftCallback(request: Request, env: Env): Promise<Resp
           grant_type: 'authorization_code'
         })
       }
-    );
-    
+    )
+
     if (!tokenResponse.ok) {
-      throw new Error('Token exchange failed');
+      throw new Error('Token exchange failed')
     }
-    
-    const tokens = await tokenResponse.json() as { id_token: string };
-    
+
+    const tokens = await tokenResponse.json() as { id_token: string }
+
     // Parse ID token
-    const idTokenParts = tokens.id_token.split('.');
+    const idTokenParts = tokens.id_token.split('.')
     const idTokenPayload = JSON.parse(atob(idTokenParts[1])) as {
-      oid: string;
-      email: string;
-      name: string;
-      picture?: string;
-    };
-    
+      oid: string
+      email: string
+      name: string
+      picture?: string
+    }
+
     const user: User = {
       id: idTokenPayload.oid,
       email: idTokenPayload.email,
       name: idTokenPayload.name,
       avatar: idTokenPayload.picture,
       roles: ['user']
-    };
-    
+    }
+
     const session: Session = {
       user,
       expiresAt: Date.now() + 24 * 60 * 60 * 1000
-    };
-    
-    const token = await signSession(session, env.AUTH_SECRET);
-    
+    }
+
+    const token = await signSession(session, env.AUTH_SECRET)
+
     const response = new Response(null, {
       status: 302,
       headers: { 'Location': env.UI_URL || '/' }
-    });
-    
-    return setSessionCookie(response, token);
+    })
+
+    return setSessionCookie(response, token)
   } catch (err) {
     return new Response(JSON.stringify({ error: 'Authentication failed: ' + (err as Error).message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 function handleLogout(): Response {
   const response = new Response(JSON.stringify({ success: true }), {
     headers: { 'Content-Type': 'application/json' }
-  });
-  return clearSessionCookie(response);
+  })
+  return clearSessionCookie(response)
 }
 
 async function handleMe(request: Request, env: Env): Promise<Response> {
-  const session = await getSession(request, env);
-  
+  const session = await getSession(request, env)
+
   if (!session) {
     return new Response(JSON.stringify({ error: 'Not authenticated' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
+
   return new Response(JSON.stringify(session.user), {
     headers: { 'Content-Type': 'application/json' }
-  });
+  })
 }
 
 // ============================================================================
@@ -304,129 +304,129 @@ async function handleAdminLogin(request: Request, env: Env): Promise<Response> {
   try {
     // Check required environment variables
     if (!env.ADMIN_TOKEN) {
-      console.error('ADMIN_TOKEN environment variable is not set');
+      console.error('ADMIN_TOKEN environment variable is not set')
       return new Response(JSON.stringify({ error: 'Server configuration error: ADMIN_TOKEN not configured' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
-    
+
     if (!env.AUTH_SECRET) {
-      console.error('AUTH_SECRET environment variable is not set');
+      console.error('AUTH_SECRET environment variable is not set')
       return new Response(JSON.stringify({ error: 'Server configuration error: AUTH_SECRET not configured' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
-    
-    const body = await request.json() as { token?: string };
-    const providedToken = body.token;
-    
+
+    const body = await request.json() as { token?: string }
+    const providedToken = body.token
+
     if (!providedToken) {
       return new Response(JSON.stringify({ error: 'Token required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
-    
+
     if (providedToken !== env.ADMIN_TOKEN) {
-      console.warn(`Invalid admin token provided: ${providedToken.slice(0, 10)}...`);
+      console.warn(`Invalid admin token provided: ${providedToken.slice(0, 10)}...`)
       return new Response(JSON.stringify({ error: 'Invalid token' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
-    
+
     // Create admin user session
     const user: User = {
       id: 'admin',
       email: 'admin@delta-curator.local',
       name: 'Administrator',
       roles: ['admin']
-    };
-    
+    }
+
     const session: Session = {
       user,
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
-    };
-    
-    const token = await signSession(session, env.AUTH_SECRET);
-    
-    const response = new Response(JSON.stringify({ 
-      success: true, 
+    }
+
+    const token = await signSession(session, env.AUTH_SECRET)
+
+    const response = new Response(JSON.stringify({
+      success: true,
       user,
       token // Return token for localStorage storage
     }), {
       headers: { 'Content-Type': 'application/json' }
-    });
-    
-    return setSessionCookie(response, token);
+    })
+
+    return setSessionCookie(response, token)
   } catch (err) {
     return new Response(JSON.stringify({ error: 'Login failed: ' + (err as Error).message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 async function handleAdminTokenAuth(request: Request, env: Env): Promise<Response> {
   try {
-    const authHeader = request.headers.get('Authorization');
-    
+    const authHeader = request.headers.get('Authorization')
+
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return new Response(JSON.stringify({ error: 'Bearer token required' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
-    
-    const providedToken = authHeader.slice(7); // Remove 'Bearer ' prefix
-    
+
+    const providedToken = authHeader.slice(7) // Remove 'Bearer ' prefix
+
     if (providedToken !== env.ADMIN_TOKEN) {
       return new Response(JSON.stringify({ error: 'Invalid token' }), {
         status: 401,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
-    
+
     // Create admin user session
     const user: User = {
       id: 'admin',
       email: 'admin@delta-curator.local',
       name: 'Administrator',
       roles: ['admin']
-    };
-    
+    }
+
     const session: Session = {
       user,
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
-    };
-    
-    const token = await signSession(session, env.AUTH_SECRET);
-    
-    return new Response(JSON.stringify({ 
-      success: true, 
+    }
+
+    const token = await signSession(session, env.AUTH_SECRET)
+
+    return new Response(JSON.stringify({
+      success: true,
       user,
       token
     }), {
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   } catch (err) {
     return new Response(JSON.stringify({ error: 'Auth failed: ' + (err as Error).message }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 async function isAdminRequest(request: Request, env: Env): Promise<boolean> {
-  const authHeader = request.headers.get('Authorization');
+  const authHeader = request.headers.get('Authorization')
   if (authHeader?.startsWith('Bearer ')) {
-    return authHeader.slice(7) === env.ADMIN_TOKEN;
+    return authHeader.slice(7) === env.ADMIN_TOKEN
   }
 
-  const session = await getSession(request, env);
-  return Boolean(session?.user?.roles?.includes('admin'));
+  const session = await getSession(request, env)
+  return Boolean(session?.user?.roles?.includes('admin'))
 }
 
 // ============================================================================
@@ -435,69 +435,69 @@ async function isAdminRequest(request: Request, env: Env): Promise<boolean> {
 
 function computeHash(content: string): string {
   // Simple hash - in production use proper SHA-256
-  return Array.from(content).reduce((a, b) => ((a << 5) - a) + b.charCodeAt(0), 0).toString(16);
+  return Array.from(content).reduce((a, b) => ((a << 5) - a) + b.charCodeAt(0), 0).toString(16)
 }
 
-const INTERNAL_CONFIG_REVISION = '1';
+const INTERNAL_CONFIG_REVISION = '1'
 
 function generateR2Key(projectId: string, prefix = 'configs/'): string {
-  return `${prefix}${projectId}.json`;
+  return `${prefix}${projectId}.json`
 }
 
 function canonicalJson(obj: unknown): string {
   // Recursively sort keys for canonical JSON representation
   const sortKeys = (value: unknown): unknown => {
     if (value === null || typeof value !== 'object') {
-      return value;
+      return value
     }
     if (Array.isArray(value)) {
-      return value.map(sortKeys);
+      return value.map(sortKeys)
     }
-    const sorted: Record<string, unknown> = {};
+    const sorted: Record<string, unknown> = {}
     for (const key of Object.keys(value).sort()) {
-      sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
+      sorted[key] = sortKeys((value as Record<string, unknown>)[key])
     }
-    return sorted;
-  };
-  return JSON.stringify(sortKeys(obj));
+    return sorted
+  }
+  return JSON.stringify(sortKeys(obj))
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
+  let binary = ''
   for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
+    binary += String.fromCharCode(byte)
   }
-  return btoa(binary);
+  return btoa(binary)
 }
 
 async function sha256Base64(input: string): Promise<string> {
-  const encoded = new TextEncoder().encode(input);
-  const digest = await crypto.subtle.digest('SHA-256', encoded);
-  return bytesToBase64(new Uint8Array(digest)).replace(/=+$/g, '');
+  const encoded = new TextEncoder().encode(input)
+  const digest = await crypto.subtle.digest('SHA-256', encoded)
+  return bytesToBase64(new Uint8Array(digest)).replace(/=+$/g, '')
 }
 
 function buildRerankPassage(payload: unknown, maxChars: number): string {
-  const doc = (payload ?? {}) as Record<string, unknown>;
-  const title = String(doc.title ?? '').trim();
-  const body = String(doc.description ?? doc.summary ?? doc.content ?? '').trim();
+  const doc = (payload ?? {}) as Record<string, unknown>
+  const title = String(doc.title ?? '').trim()
+  const body = String(doc.description ?? doc.summary ?? doc.content ?? '').trim()
   const facets = Array.isArray(doc.facets)
     ? doc.facets
       .map((facet) => {
-        if (!facet || typeof facet !== 'object') return '';
-        const typed = facet as Record<string, unknown>;
-        const key = String(typed.type ?? typed.key ?? '').trim();
-        const value = String(typed.value ?? '').trim();
-        return `${key}:${value}`;
+        if (!facet || typeof facet !== 'object') return ''
+        const typed = facet as Record<string, unknown>
+        const key = String(typed.type ?? typed.key ?? '').trim()
+        const value = String(typed.value ?? '').trim()
+        return `${key}:${value}`
       })
       .filter(Boolean)
       .join(', ')
-    : '';
+    : ''
 
   const text = [title, body.slice(0, maxChars), facets ? `facets: ${facets}` : '']
     .filter(Boolean)
-    .join('\n');
+    .join('\n')
 
-  return text.slice(0, maxChars);
+  return text.slice(0, maxChars)
 }
 
 function extractRssSummaryMetrics(
@@ -505,26 +505,26 @@ function extractRssSummaryMetrics(
   batchResult: { items: unknown[]; newState: unknown; diagnostics?: unknown } | null
 ): Record<string, number> | undefined {
   if (!batchResult) {
-    return undefined;
+    return undefined
   }
 
-  const normalizedPluginType = pluginType.trim().toLowerCase();
+  const normalizedPluginType = pluginType.trim().toLowerCase()
   if (normalizedPluginType !== 'rss_source' && normalizedPluginType !== 'rss' && normalizedPluginType !== 'hacker-news') {
-    return undefined;
+    return undefined
   }
 
-  const diagnostics = batchResult.diagnostics;
+  const diagnostics = batchResult.diagnostics
   if (!diagnostics || typeof diagnostics !== 'object') {
-    return undefined;
+    return undefined
   }
 
-  const d = diagnostics as Record<string, unknown>;
+  const d = diagnostics as Record<string, unknown>
   const toSafeInt = (value: unknown): number => {
     if (typeof value !== 'number' || !Number.isFinite(value)) {
-      return 0;
+      return 0
     }
-    return Math.max(0, Math.floor(value));
-  };
+    return Math.max(0, Math.floor(value))
+  }
 
   return {
     normalized_items_count: toSafeInt(d.normalized_items_count),
@@ -534,12 +534,12 @@ function extractRssSummaryMetrics(
     filtered_by_older_than_cursor: toSafeInt(d.filtered_by_older_than_cursor),
     filtered_by_cursor_tie_id: toSafeInt(d.filtered_by_cursor_tie_id),
     filtered_by_limit: toSafeInt(d.filtered_by_limit)
-  };
+  }
 }
 
 async function getTableColumns(env: Env, table: 'commits' | 'source_state' | 'curated_docs'): Promise<Set<string>> {
-  const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
-  return new Set((results ?? []).map((row) => row.name));
+  const { results } = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>()
+  return new Set((results ?? []).map((row) => row.name))
 }
 
 async function ensureProcessedUrlsSchema(env: Env): Promise<void> {
@@ -551,70 +551,70 @@ async function ensureProcessedUrlsSchema(env: Env): Promise<void> {
       first_seen_at TEXT NOT NULL,
       PRIMARY KEY (project_id, source_id, target_url)
     )`
-  ).run();
+  ).run()
 
   await env.DB.prepare(
     'CREATE INDEX IF NOT EXISTS idx_processed_urls_first_seen ON processed_urls(first_seen_at)'
-  ).run();
+  ).run()
 }
 
 function canonicalizeTargetUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
+  const trimmed = raw.trim()
+  if (!trimmed) return null
 
   try {
-    const url = new URL(trimmed);
-    url.hash = '';
+    const url = new URL(trimmed)
+    url.hash = ''
     if ((url.protocol === 'https:' && url.port === '443') || (url.protocol === 'http:' && url.port === '80')) {
-      url.port = '';
+      url.port = ''
     }
     if (url.pathname.length > 1 && url.pathname.endsWith('/')) {
-      url.pathname = url.pathname.slice(0, -1);
+      url.pathname = url.pathname.slice(0, -1)
     }
-    return url.toString();
+    return url.toString()
   } catch {
-    return trimmed;
+    return trimmed
   }
 }
 
 function extractTargetUrl(payload: unknown): string | null {
-  const doc = (payload ?? {}) as Record<string, unknown>;
+  const doc = (payload ?? {}) as Record<string, unknown>
   const raw = typeof doc.link === 'string'
     ? doc.link
     : typeof doc.url === 'string'
       ? doc.url
-      : null;
+      : null
 
-  if (!raw) return null;
-  return canonicalizeTargetUrl(raw);
+  if (!raw) return null
+  return canonicalizeTargetUrl(raw)
 }
 
 async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
-  const commitColumns = await getTableColumns(env, 'commits');
+  const commitColumns = await getTableColumns(env, 'commits')
 
   if (!commitColumns.has('project_id')) {
     try {
-      await env.DB.prepare('ALTER TABLE commits ADD COLUMN project_id TEXT').run();
+      await env.DB.prepare('ALTER TABLE commits ADD COLUMN project_id TEXT').run()
     } catch (err) {
-      const message = String(err);
+      const message = String(err)
       if (!message.includes('duplicate column name')) {
-        throw err;
+        throw err
       }
     }
   }
 
   await env.DB.prepare(
     'CREATE INDEX IF NOT EXISTS idx_commits_project_source ON commits(project_id, source_id)'
-  ).run();
+  ).run()
 
   if (commitColumns.has('committed_at')) {
     await env.DB.prepare(
       'CREATE INDEX IF NOT EXISTS idx_commits_project_source_committed_time ON commits(project_id, source_id, committed_at)'
-    ).run();
+    ).run()
   } else if (commitColumns.has('created_at')) {
     await env.DB.prepare(
       'CREATE INDEX IF NOT EXISTS idx_commits_project_source_created_time ON commits(project_id, source_id, created_at)'
-    ).run();
+    ).run()
   }
 
   const legacyCommitExists = await env.DB.prepare(
@@ -622,15 +622,15 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
      FROM commits
      WHERE project_id IS NULL OR TRIM(project_id) = ''
      LIMIT 1`
-  ).first<{ commit_id: string }>();
+  ).first<{ commit_id: string }>()
 
   if (!legacyCommitExists?.commit_id) {
-    return;
+    return
   }
 
-  const sourceStateColumns = await getTableColumns(env, 'source_state');
-  const curatedDocColumns = await getTableColumns(env, 'curated_docs');
-  const legacyCommitPredicate = "project_id IS NULL OR TRIM(project_id) = ''";
+  const sourceStateColumns = await getTableColumns(env, 'source_state')
+  const curatedDocColumns = await getTableColumns(env, 'curated_docs')
+  const legacyCommitPredicate = "project_id IS NULL OR TRIM(project_id) = ''"
 
   if (sourceStateColumns.has('last_commit_id')) {
     await env.DB.prepare(
@@ -640,7 +640,7 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
          FROM commits
          WHERE ${legacyCommitPredicate}
        )`
-    ).run();
+    ).run()
   }
 
   if (curatedDocColumns.has('event_id')) {
@@ -652,7 +652,7 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
          JOIN commits c ON c.commit_id = e.commit_id
          WHERE c.${legacyCommitPredicate}
        )`
-    ).run();
+    ).run()
   }
 
   if (curatedDocColumns.has('last_event_id')) {
@@ -664,7 +664,7 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
          JOIN commits c ON c.commit_id = e.commit_id
          WHERE c.${legacyCommitPredicate}
        )`
-    ).run();
+    ).run()
   }
 
   await env.DB.prepare(
@@ -675,7 +675,7 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
        JOIN commits c ON c.commit_id = e.commit_id
        WHERE c.${legacyCommitPredicate}
      )`
-  ).run();
+  ).run()
 
   await env.DB.prepare(
     `DELETE FROM fingerprint_index
@@ -685,7 +685,7 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
        JOIN commits c ON c.commit_id = e.commit_id
        WHERE c.${legacyCommitPredicate}
      )`
-  ).run();
+  ).run()
 
   await env.DB.prepare(
     `DELETE FROM hold_index
@@ -695,7 +695,7 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
        JOIN commits c ON c.commit_id = e.commit_id
        WHERE c.${legacyCommitPredicate}
      )`
-  ).run();
+  ).run()
 
   await env.DB.prepare(
     `DELETE FROM artifacts
@@ -704,7 +704,7 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
        FROM commits
        WHERE ${legacyCommitPredicate}
      )`
-  ).run();
+  ).run()
 
   await env.DB.prepare(
     `DELETE FROM events
@@ -713,16 +713,16 @@ async function ensureCommitsProjectScopeSchema(env: Env): Promise<void> {
        FROM commits
        WHERE ${legacyCommitPredicate}
      )`
-  ).run();
+  ).run()
 
   await env.DB.prepare(
     `DELETE FROM commits
      WHERE ${legacyCommitPredicate}`
-  ).run();
+  ).run()
 }
 
 function makeScopedSourceStateId(projectId: string, sourceId: string): string {
-  return `${projectId}::${sourceId}`;
+  return `${projectId}::${sourceId}`
 }
 
 async function readSourceStateWithFallback(
@@ -730,7 +730,7 @@ async function readSourceStateWithFallback(
   projectId: string,
   sourceId: string
 ): Promise<Record<string, unknown>> {
-  const scopedSourceId = makeScopedSourceStateId(projectId, sourceId);
+  const scopedSourceId = makeScopedSourceStateId(projectId, sourceId)
 
   const row = await env.DB.prepare(
     `SELECT state
@@ -738,16 +738,16 @@ async function readSourceStateWithFallback(
      WHERE source_id IN (?, ?)
      ORDER BY CASE WHEN source_id = ? THEN 0 ELSE 1 END, updated_at DESC
      LIMIT 1`
-  ).bind(scopedSourceId, sourceId, scopedSourceId).first<{ state: string }>();
+  ).bind(scopedSourceId, sourceId, scopedSourceId).first<{ state: string }>()
 
   if (!row?.state) {
-    return {};
+    return {}
   }
 
   try {
-    return JSON.parse(row.state) as Record<string, unknown>;
+    return JSON.parse(row.state) as Record<string, unknown>
   } catch {
-    return {};
+    return {}
   }
 }
 
@@ -759,7 +759,7 @@ async function upsertSourceState(
   now: string,
   commitInfo?: { commitId: string; commitKey: string }
 ): Promise<void> {
-  const stateJson = JSON.stringify(state);
+  const stateJson = JSON.stringify(state)
 
   if (columns.has('last_commit_id') && columns.has('last_commit_key')) {
     if (commitInfo) {
@@ -773,13 +773,13 @@ async function upsertSourceState(
         commitInfo.commitId,
         commitInfo.commitKey,
         now
-      ).run();
-      return;
+      ).run()
+      return
     }
 
     const existing = await env.DB.prepare(
       `SELECT source_id FROM source_state WHERE source_id = ?`
-    ).bind(sourceId).first();
+    ).bind(sourceId).first()
 
     if (existing) {
       await env.DB.prepare(
@@ -790,9 +790,9 @@ async function upsertSourceState(
         stateJson,
         now,
         sourceId
-      ).run();
+      ).run()
     }
-    return;
+    return
   }
 
   await env.DB.prepare(
@@ -805,7 +805,7 @@ async function upsertSourceState(
     sourceId,
     stateJson,
     now
-  ).run();
+  ).run()
 }
 
 async function ensureCursorCommit(
@@ -819,11 +819,11 @@ async function ensureCursorCommit(
   now: string,
   itemIds: string[]
 ): Promise<{ commitId: string; commitKey: string }> {
-  const oldStateJson = JSON.stringify(oldState ?? {});
-  const newStateJson = JSON.stringify(newState ?? {});
+  const oldStateJson = JSON.stringify(oldState ?? {})
+  const newStateJson = JSON.stringify(newState ?? {})
   const commitKey = await sha256Base64(
     `${projectId}:${sourceId}:${oldStateJson}:${itemIds.sort().join('|')}`
-  );
+  )
 
   if (
     commitColumns.has('commit_key') &&
@@ -832,13 +832,13 @@ async function ensureCursorCommit(
   ) {
     const existing = await env.DB.prepare(
       'SELECT commit_id FROM commits WHERE commit_key = ?'
-    ).bind(commitKey).first<{ commit_id: string }>();
+    ).bind(commitKey).first<{ commit_id: string }>()
 
     if (existing?.commit_id) {
-      return { commitId: existing.commit_id, commitKey };
+      return { commitId: existing.commit_id, commitKey }
     }
 
-    const commitId = crypto.randomUUID();
+    const commitId = crypto.randomUUID()
     if (commitColumns.has('project_id')) {
       await env.DB.prepare(
         `INSERT INTO commits
@@ -853,7 +853,7 @@ async function ensureCursorCommit(
         oldStateJson,
         newStateJson,
         now
-      ).run();
+      ).run()
     } else {
       await env.DB.prepare(
         `INSERT INTO commits
@@ -867,13 +867,13 @@ async function ensureCursorCommit(
         oldStateJson,
         newStateJson,
         now
-      ).run();
+      ).run()
     }
 
-    return { commitId, commitKey };
+    return { commitId, commitKey }
   }
 
-  const commitId = crypto.randomUUID();
+  const commitId = crypto.randomUUID()
   if (commitColumns.has('source_state')) {
     if (commitColumns.has('project_id')) {
       await env.DB.prepare(
@@ -889,7 +889,7 @@ async function ensureCursorCommit(
         itemIds.length,
         0,
         now
-      ).run();
+      ).run()
     } else {
       await env.DB.prepare(
         `INSERT INTO commits
@@ -903,51 +903,51 @@ async function ensureCursorCommit(
         itemIds.length,
         0,
         now
-      ).run();
+      ).run()
     }
 
-    return { commitId, commitKey };
+    return { commitId, commitKey }
   }
 
-  throw new Error('Unsupported commits table schema');
+  throw new Error('Unsupported commits table schema')
 }
 
 function validateProjectConfig(config: unknown): { success: boolean; data?: ProjectConfig; error?: string } {
   try {
-    const c = config as ProjectConfig;
-    if (!c.project_id) return { success: false, error: 'project_id required' };
-    if (!c.project_name) return { success: false, error: 'project_name required' };
-    if (!c.topic) return { success: false, error: 'topic required' };
+    const c = config as ProjectConfig
+    if (!c.project_id) return { success: false, error: 'project_id required' }
+    if (!c.project_name) return { success: false, error: 'project_name required' }
+    if (!c.topic) return { success: false, error: 'topic required' }
     if (!c.sources || !Array.isArray(c.sources) || c.sources.length === 0) {
-      return { success: false, error: 'at least one source required' };
+      return { success: false, error: 'at least one source required' }
     }
-    if (!c.pipeline) return { success: false, error: 'pipeline required' };
-    if (!c.storage) return { success: false, error: 'storage required' };
-    return { success: true, data: c };
+    if (!c.pipeline) return { success: false, error: 'pipeline required' }
+    if (!c.storage) return { success: false, error: 'storage required' }
+    return { success: true, data: c }
   } catch (e) {
-    return { success: false, error: 'Invalid config format' };
+    return { success: false, error: 'Invalid config format' }
   }
 }
 
 async function writeConfig(
-  env: Env, 
-  config: unknown, 
+  env: Env,
+  config: unknown,
   isActive = false
 ): Promise<ConfigWriteResult> {
-  const validation = validateProjectConfig(config);
+  const validation = validateProjectConfig(config)
   if (!validation.success) {
-    return { success: false, error: validation.error };
+    return { success: false, error: validation.error }
   }
-  
-  const validConfig = validation.data!;
-  const projectId = validConfig.project_id;
-  const projectName = validConfig.project_name;
-  const now = new Date().toISOString();
-  
-  const content = canonicalJson(validConfig);
-  const hash = computeHash(content);
-  const r2Key = generateR2Key(projectId);
-  
+
+  const validConfig = validation.data!
+  const projectId = validConfig.project_id
+  const projectName = validConfig.project_name
+  const now = new Date().toISOString()
+
+  const content = canonicalJson(validConfig)
+  const hash = computeHash(content)
+  const r2Key = generateR2Key(projectId)
+
   try {
     if (isActive) {
       await env.DB.prepare(
@@ -955,15 +955,15 @@ async function writeConfig(
          SET is_active = 0,
              updated_at = ?
          WHERE is_active = 1`
-      ).bind(now).run();
+      ).bind(now).run()
     }
 
     // Write to R2 first
     await env.ARTIFACTS.put(r2Key, content, {
       httpMetadata: { contentType: 'application/json' },
       customMetadata: { 'project-id': projectId, version: INTERNAL_CONFIG_REVISION, hash }
-    });
-    
+    })
+
     // Write to D1
     await env.DB.prepare(
       `INSERT OR REPLACE INTO project_configs
@@ -978,18 +978,18 @@ async function writeConfig(
       hash,
       validConfig.created_at || now,
       now
-    ).run();
-    
+    ).run()
+
     return {
       success: true,
       projectId,
       r2Key,
       hash
-    };
+    }
   } catch (err) {
     // Cleanup R2 on error
-    try { await env.ARTIFACTS.delete(r2Key); } catch {}
-    return { success: false, error: `Failed to write config: ${err}` };
+    try { await env.ARTIFACTS.delete(r2Key) } catch { }
+    return { success: false, error: `Failed to write config: ${err}` }
   }
 }
 
@@ -997,23 +997,23 @@ async function readConfig(env: Env, projectId: string): Promise<{ config?: Proje
   try {
     const index = await env.DB.prepare(
       'SELECT * FROM project_configs WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1'
-    ).bind(projectId).first<ProjectConfigIndex>();
-    
+    ).bind(projectId).first<ProjectConfigIndex>()
+
     if (!index) {
-      return { error: `Config not found for project: ${projectId}` };
+      return { error: `Config not found for project: ${projectId}` }
     }
-    
-    const obj = await env.ARTIFACTS.get(index.r2_key);
+
+    const obj = await env.ARTIFACTS.get(index.r2_key)
     if (!obj) {
-      return { error: `Config object not found in R2: ${index.r2_key}` };
+      return { error: `Config object not found in R2: ${index.r2_key}` }
     }
-    
-    const content = await obj.text();
-    const parsed = JSON.parse(content) as ProjectConfig;
-    
-    return { config: parsed, index };
+
+    const content = await obj.text()
+    const parsed = JSON.parse(content) as ProjectConfig
+
+    return { config: parsed, index }
   } catch (err) {
-    return { error: `Failed to read config: ${err}` };
+    return { error: `Failed to read config: ${err}` }
   }
 }
 
@@ -1023,64 +1023,64 @@ async function normalizeActiveProjectState(env: Env): Promise<void> {
      FROM project_configs
      WHERE is_active = 1
      ORDER BY updated_at DESC`
-  ).all<{ project_id: string; version: string }>();
+  ).all<{ project_id: string; version: string }>()
 
-  let winner: { project_id: string; version: string } | null = null;
+  let winner: { project_id: string; version: string } | null = null
   if ((activeRows.results || []).length > 0) {
-    winner = activeRows.results![0];
+    winner = activeRows.results![0]
   } else {
     winner = await env.DB.prepare(
       `SELECT project_id, version
        FROM project_configs
        ORDER BY updated_at DESC
        LIMIT 1`
-    ).first<{ project_id: string; version: string }>();
+    ).first<{ project_id: string; version: string }>()
   }
 
   if (!winner) {
-    return;
+    return
   }
 
   const needsNormalize = (activeRows.results || []).length !== 1 ||
     activeRows.results![0]?.project_id !== winner.project_id ||
-    activeRows.results![0]?.version !== winner.version;
+    activeRows.results![0]?.version !== winner.version
 
   if (!needsNormalize) {
-    return;
+    return
   }
 
-  const now = new Date().toISOString();
+  const now = new Date().toISOString()
   await env.DB.prepare(
     `UPDATE project_configs
      SET is_active = 0,
          updated_at = ?`
-  ).bind(now).run();
+  ).bind(now).run()
 
   await env.DB.prepare(
     `UPDATE project_configs
      SET is_active = 1,
          updated_at = ?
      WHERE project_id = ? AND version = ?`
-  ).bind(now, winner.project_id, winner.version).run();
+  ).bind(now, winner.project_id, winner.version).run()
 }
 
 async function listConfigs(env: Env): Promise<{ configs: ProjectConfigIndex[]; error?: string }> {
   try {
-    await normalizeActiveProjectState(env);
+    await normalizeActiveProjectState(env)
 
     const result = await env.DB.prepare(
       'SELECT * FROM project_configs ORDER BY updated_at DESC'
-    ).all<ProjectConfigIndex>();
-    
-    return { configs: result.results || [] };
+    ).all<ProjectConfigIndex>()
+
+    return { configs: result.results || [] }
   } catch (err) {
-    return { configs: [], error: `Failed to list configs: ${err}` };
+    return { configs: [], error: `Failed to list configs: ${err}` }
   }
 }
 
 async function setActiveConfig(env: Env, projectId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const now = new Date().toISOString();
+    const now = new Date().toISOString()
 
     const target = await env.DB.prepare(
       `SELECT project_id, version
@@ -1088,10 +1088,10 @@ async function setActiveConfig(env: Env, projectId: string): Promise<{ success: 
        WHERE project_id = ?
        ORDER BY updated_at DESC
        LIMIT 1`
-    ).bind(projectId).first<{ project_id: string; version: string }>();
+    ).bind(projectId).first<{ project_id: string; version: string }>()
 
     if (!target) {
-      return { success: false, error: `Project not found: ${projectId}` };
+      return { success: false, error: `Project not found: ${projectId}` }
     }
 
     await env.DB.prepare(
@@ -1099,54 +1099,54 @@ async function setActiveConfig(env: Env, projectId: string): Promise<{ success: 
        SET is_active = 0,
            updated_at = ?
        WHERE is_active = 1`
-    ).bind(now).run();
+    ).bind(now).run()
 
     await env.DB.prepare(
       `UPDATE project_configs
        SET is_active = 1,
            updated_at = ?
        WHERE project_id = ? AND version = ?`
-    ).bind(now, target.project_id, target.version).run();
-    
-    return { success: true };
+    ).bind(now, target.project_id, target.version).run()
+
+    return { success: true }
   } catch (err) {
-    return { success: false, error: `Failed to set active: ${err}` };
+    return { success: false, error: `Failed to set active: ${err}` }
   }
 }
 
 async function getActiveConfig(env: Env): Promise<{ config?: ProjectConfig; index?: ProjectConfigIndex; error?: string }> {
   try {
-    await normalizeActiveProjectState(env);
+    await normalizeActiveProjectState(env)
 
     const index = await env.DB.prepare(
       'SELECT * FROM project_configs WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1'
-    ).first<ProjectConfigIndex>();
-    
+    ).first<ProjectConfigIndex>()
+
     if (!index) {
-      return { error: 'No active config found' };
+      return { error: 'No active config found' }
     }
-    
-    return readConfig(env, index.project_id);
+
+    return readConfig(env, index.project_id)
   } catch (err) {
-    return { error: `Failed to get active config: ${err}` };
+    return { error: `Failed to get active config: ${err}` }
   }
 }
 
 async function deleteConfig(env: Env, projectId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const r2Key = generateR2Key(projectId);
+    const r2Key = generateR2Key(projectId)
 
     const deletingRow = await env.DB.prepare(
       'SELECT is_active, version FROM project_configs WHERE project_id = ? ORDER BY updated_at DESC LIMIT 1'
-    ).bind(projectId).first<{ is_active: number; version: string }>();
+    ).bind(projectId).first<{ is_active: number; version: string }>()
 
     if (!deletingRow) {
-      return { success: false, error: `Config not found for ${projectId}` };
+      return { success: false, error: `Config not found for ${projectId}` }
     }
-    
+
     await env.DB.prepare(
       'DELETE FROM project_configs WHERE project_id = ?'
-    ).bind(projectId).run();
+    ).bind(projectId).run()
 
     if (deletingRow.is_active === 1) {
       const fallback = await env.DB.prepare(
@@ -1154,31 +1154,31 @@ async function deleteConfig(env: Env, projectId: string): Promise<{ success: boo
          FROM project_configs
          ORDER BY updated_at DESC
          LIMIT 1`
-      ).first<{ project_id: string; version: string }>();
+      ).first<{ project_id: string; version: string }>()
 
       if (fallback) {
-        const now = new Date().toISOString();
+        const now = new Date().toISOString()
         await env.DB.prepare(
           `UPDATE project_configs
            SET is_active = 0,
                updated_at = ?
            WHERE is_active = 1`
-        ).bind(now).run();
+        ).bind(now).run()
 
         await env.DB.prepare(
           `UPDATE project_configs
            SET is_active = 1,
                updated_at = ?
            WHERE project_id = ? AND version = ?`
-        ).bind(now, fallback.project_id, fallback.version).run();
+        ).bind(now, fallback.project_id, fallback.version).run()
       }
     }
-    
-    await env.ARTIFACTS.delete(r2Key);
-    
-    return { success: true };
+
+    await env.ARTIFACTS.delete(r2Key)
+
+    return { success: true }
   } catch (err) {
-    return { success: false, error: `Failed to delete: ${err}` };
+    return { success: false, error: `Failed to delete: ${err}` }
   }
 }
 
@@ -1209,19 +1209,19 @@ async function seedConfig(env: Env): Promise<{ success: boolean; projectId?: str
       committer: { plugin: 'd1_committer', config: { database: 'DB' } },
       artifacts: { kind: 'r2', bucket: 'ARTIFACTS', prefix: 'delta-curator/' }
     }
-  };
-  
-  const existing = await readConfig(env, seedConfig.project_id);
+  }
+
+  const existing = await readConfig(env, seedConfig.project_id)
   if (existing.config && canonicalJson(existing.config) === canonicalJson(seedConfig)) {
-    return { success: true, projectId: seedConfig.project_id };
+    return { success: true, projectId: seedConfig.project_id }
   }
-  
-  const result = await writeConfig(env, seedConfig, true);
+
+  const result = await writeConfig(env, seedConfig, true)
   if (!result.success) {
-    return { success: false, error: result.error };
+    return { success: false, error: result.error }
   }
-  
-  return { success: true, projectId: result.projectId };
+
+  return { success: true, projectId: result.projectId }
 }
 
 // ============================================================================
@@ -1229,151 +1229,151 @@ async function seedConfig(env: Env): Promise<{ success: boolean; projectId?: str
 // ============================================================================
 
 async function handleConfigListRoute(env: Env): Promise<Response> {
-  const result = await listConfigs(env);
+  const result = await listConfigs(env)
   if (result.error) {
-    return new Response(JSON.stringify({ error: result.error }), { 
-      status: 500, 
-      headers: { 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ error: result.error }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    })
   }
   return new Response(JSON.stringify({ configs: result.configs }), {
     headers: { 'Content-Type': 'application/json' }
-  });
+  })
 }
 
 async function handleConfigGetRoute(env: Env, request: Request, projectId: string): Promise<Response> {
-  const result = await readConfig(env, projectId);
-  
+  const result = await readConfig(env, projectId)
+
   if (result.error) {
-    const status = result.error.includes('not found') ? 404 : 500;
-    return new Response(JSON.stringify({ error: result.error }), { 
-      status, 
-      headers: { 'Content-Type': 'application/json' } 
-    });
+    const status = result.error.includes('not found') ? 404 : 500
+    return new Response(JSON.stringify({ error: result.error }), {
+      status,
+      headers: { 'Content-Type': 'application/json' }
+    })
   }
-  
+
   return new Response(JSON.stringify({ config: result.config, index: result.index }), {
     headers: { 'Content-Type': 'application/json' }
-  });
+  })
 }
 
 async function handleConfigWriteRoute(env: Env, request: Request): Promise<Response> {
   try {
-    const url = new URL(request.url);
-    const activate = url.searchParams.get('activate') === 'true';
-    
-    const body = await request.json();
-    const result = await writeConfig(env, body, activate);
-    
+    const url = new URL(request.url)
+    const activate = url.searchParams.get('activate') === 'true'
+
+    const body = await request.json()
+    const result = await writeConfig(env, body, activate)
+
     if (!result.success) {
-      return new Response(JSON.stringify({ error: result.error }), { 
-        status: 400, 
-        headers: { 'Content-Type': 'application/json' } 
-      });
+      return new Response(JSON.stringify({ error: result.error }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      })
     }
-    
+
     return new Response(JSON.stringify({
       success: true,
       project_id: result.projectId,
       r2_key: result.r2Key,
       hash: result.hash,
       active: activate
-    }), { 
+    }), {
       status: 201,
-      headers: { 'Content-Type': 'application/json' } 
-    });
+      headers: { 'Content-Type': 'application/json' }
+    })
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err) }), { 
-      status: 500, 
-      headers: { 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ error: String(err) }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    })
   }
 }
 
 async function handleConfigActivateRoute(env: Env, projectId: string): Promise<Response> {
-  const result = await setActiveConfig(env, projectId);
-  
+  const result = await setActiveConfig(env, projectId)
+
   if (!result.success) {
-    const status = result.error?.includes('not found') ? 404 : 500;
-    return new Response(JSON.stringify({ error: result.error }), { 
-      status, 
-      headers: { 'Content-Type': 'application/json' } 
-    });
+    const status = result.error?.includes('not found') ? 404 : 500
+    return new Response(JSON.stringify({ error: result.error }), {
+      status,
+      headers: { 'Content-Type': 'application/json' }
+    })
   }
-  
+
   return new Response(JSON.stringify({ success: true, project_id: projectId }), {
     headers: { 'Content-Type': 'application/json' }
-  });
+  })
 }
 
 async function handleConfigDeleteRoute(env: Env, projectId: string): Promise<Response> {
-  const result = await deleteConfig(env, projectId);
-  
+  const result = await deleteConfig(env, projectId)
+
   if (!result.success) {
-    return new Response(JSON.stringify({ error: result.error }), { 
-      status: 500, 
-      headers: { 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ error: result.error }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    })
   }
-  
+
   return new Response(JSON.stringify({ success: true, project_id: projectId }), {
     headers: { 'Content-Type': 'application/json' }
-  });
+  })
 }
 
 async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promise<Response> {
-  const hasAdminAccess = await isAdminRequest(request, env);
-  const session = await getSession(request, env);
-  const hasSessionAccess = Boolean(session?.user);
+  const hasAdminAccess = await isAdminRequest(request, env)
+  const session = await getSession(request, env)
+  const hasSessionAccess = Boolean(session?.user)
 
   if (!hasAdminAccess && !hasSessionAccess) {
     return new Response(JSON.stringify({ error: 'Authentication required' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 
   try {
     const body = await request.json() as {
-      project_id?: string;
-      source_id?: string;
-      cursor_published_at?: string | null;
-      clear_recent_guids?: boolean;
-    };
+      project_id?: string
+      source_id?: string
+      cursor_published_at?: string | null
+      clear_recent_guids?: boolean
+    }
 
-    const sourceId = (body.source_id || '').trim();
+    const sourceId = (body.source_id || '').trim()
     if (!sourceId) {
       return new Response(JSON.stringify({ error: 'source_id is required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const cursorPublishedAt = body.cursor_published_at ?? null;
+    const cursorPublishedAt = body.cursor_published_at ?? null
     if (cursorPublishedAt !== null && Number.isNaN(Date.parse(cursorPublishedAt))) {
       return new Response(JSON.stringify({ error: 'cursor_published_at must be valid ISO datetime or null' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const projectId = (body.project_id || '').trim();
+    const projectId = (body.project_id || '').trim()
     if (!projectId) {
       return new Response(JSON.stringify({ error: 'project_id is required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const configResult = await readConfig(env, projectId);
+    const configResult = await readConfig(env, projectId)
     if (configResult.error || !configResult.config) {
       return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const sourceExists = configResult.config.sources.some((source) => source.id === sourceId);
+    const sourceExists = configResult.config.sources.some((source) => source.id === sourceId)
     if (!sourceExists) {
       return new Response(JSON.stringify({
         error: `Unknown source_id: ${sourceId}`,
@@ -1381,35 +1381,35 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const now = new Date().toISOString();
-    await ensureCommitsProjectScopeSchema(env);
-    const scopedSourceStateId = makeScopedSourceStateId(configResult.config.project_id, sourceId);
-    const oldState = await readSourceStateWithFallback(env, configResult.config.project_id, sourceId);
+    const now = new Date().toISOString()
+    await ensureCommitsProjectScopeSchema(env)
+    const scopedSourceStateId = makeScopedSourceStateId(configResult.config.project_id, sourceId)
+    const oldState = await readSourceStateWithFallback(env, configResult.config.project_id, sourceId)
 
     const newState: Record<string, unknown> = {
       ...oldState,
       lastFetch: now
-    };
+    }
 
     if (cursorPublishedAt === null) {
-      delete newState.cursorPublishedAt;
+      delete newState.cursorPublishedAt
     } else {
-      newState.cursorPublishedAt = new Date(cursorPublishedAt).toISOString();
+      newState.cursorPublishedAt = new Date(cursorPublishedAt).toISOString()
     }
 
     if (body.clear_recent_guids ?? true) {
-      newState.cursorIds = [];
-      newState.recentIds = [];
-      newState.recentGuids = [];
-      newState.processedGuids = [];
+      newState.cursorIds = []
+      newState.recentIds = []
+      newState.recentGuids = []
+      newState.processedGuids = []
     }
 
-    const traceId = crypto.randomUUID();
-    const commitColumns = await getTableColumns(env, 'commits');
-    const sourceStateColumns = await getTableColumns(env, 'source_state');
+    const traceId = crypto.randomUUID()
+    const commitColumns = await getTableColumns(env, 'commits')
+    const sourceStateColumns = await getTableColumns(env, 'source_state')
     const cursorCommit = await ensureCursorCommit(
       env,
       commitColumns,
@@ -1420,7 +1420,7 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
       newState,
       now,
       [`cursor-update:${sourceId}:${newState.cursorPublishedAt ?? 'null'}`]
-    );
+    )
 
     await upsertSourceState(
       env,
@@ -1429,7 +1429,7 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
       newState,
       now,
       { commitId: cursorCommit.commitId, commitKey: cursorCommit.commitKey }
-    );
+    )
 
     return new Response(JSON.stringify({
       success: true,
@@ -1441,58 +1441,58 @@ async function handleSourceCursorUpdateRoute(env: Env, request: Request): Promis
       trace_id: traceId
     }), {
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err?.message || String(err) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 async function handleSourceProcessedUrlsResetRoute(env: Env, request: Request): Promise<Response> {
-  const hasAdminAccess = await isAdminRequest(request, env);
-  const session = await getSession(request, env);
-  const hasSessionAccess = Boolean(session?.user);
+  const hasAdminAccess = await isAdminRequest(request, env)
+  const session = await getSession(request, env)
+  const hasSessionAccess = Boolean(session?.user)
 
   if (!hasAdminAccess && !hasSessionAccess) {
     return new Response(JSON.stringify({ error: 'Authentication required' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 
   try {
     const body = await request.json() as {
-      project_id?: string;
-      source_id?: string;
-    };
+      project_id?: string
+      source_id?: string
+    }
 
-    const sourceId = (body.source_id || '').trim();
+    const sourceId = (body.source_id || '').trim()
     if (!sourceId) {
       return new Response(JSON.stringify({ error: 'source_id is required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const projectId = (body.project_id || '').trim();
+    const projectId = (body.project_id || '').trim()
     if (!projectId) {
       return new Response(JSON.stringify({ error: 'project_id is required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const configResult = await readConfig(env, projectId);
+    const configResult = await readConfig(env, projectId)
     if (configResult.error || !configResult.config) {
       return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const sourceExists = configResult.config.sources.some((source) => source.id === sourceId);
+    const sourceExists = configResult.config.sources.some((source) => source.id === sourceId)
     if (!sourceExists) {
       return new Response(JSON.stringify({
         error: `Unknown source_id: ${sourceId}`,
@@ -1500,25 +1500,25 @@ async function handleSourceProcessedUrlsResetRoute(env: Env, request: Request): 
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    await ensureProcessedUrlsSchema(env);
+    await ensureProcessedUrlsSchema(env)
 
     const existing = await env.DB.prepare(
       `SELECT COUNT(*) AS total
        FROM processed_urls
        WHERE project_id = ? AND source_id = ?`
-    ).bind(projectId, sourceId).first<{ total: number | string }>();
+    ).bind(projectId, sourceId).first<{ total: number | string }>()
 
     const deletedCount = typeof existing?.total === 'number'
       ? existing.total
-      : Number(existing?.total || 0);
+      : Number(existing?.total || 0)
 
     await env.DB.prepare(
       `DELETE FROM processed_urls
        WHERE project_id = ? AND source_id = ?`
-    ).bind(projectId, sourceId).run();
+    ).bind(projectId, sourceId).run()
 
     return new Response(JSON.stringify({
       success: true,
@@ -1527,64 +1527,64 @@ async function handleSourceProcessedUrlsResetRoute(env: Env, request: Request): 
       deleted_count: deletedCount
     }), {
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err?.message || String(err) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 async function handleConfigActiveRoute(env: Env): Promise<Response> {
-  const result = await getActiveConfig(env);
-  
+  const result = await getActiveConfig(env)
+
   if (result.error) {
-    const status = result.error.includes('not found') ? 404 : 500;
-    return new Response(JSON.stringify({ error: result.error }), { 
-      status, 
-      headers: { 'Content-Type': 'application/json' } 
-    });
+    const status = result.error.includes('not found') ? 404 : 500
+    return new Response(JSON.stringify({ error: result.error }), {
+      status,
+      headers: { 'Content-Type': 'application/json' }
+    })
   }
-  
+
   return new Response(JSON.stringify({ config: result.config, index: result.index }), {
     headers: { 'Content-Type': 'application/json' }
-  });
+  })
 }
 
 async function handleSeedRoute(env: Env): Promise<Response> {
-  const result = await seedConfig(env);
-  
+  const result = await seedConfig(env)
+
   if (!result.success) {
-    return new Response(JSON.stringify({ error: result.error }), { 
-      status: 500, 
-      headers: { 'Content-Type': 'application/json' } 
-    });
+    return new Response(JSON.stringify({ error: result.error }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    })
   }
-  
-  return new Response(JSON.stringify({ 
-    success: true, 
+
+  return new Response(JSON.stringify({
+    success: true,
     project_id: result.projectId,
-    already_exists: false 
+    already_exists: false
   }), {
     headers: { 'Content-Type': 'application/json' }
-  });
+  })
 }
 
 async function handleRunRoute(env: Env, request: Request): Promise<Response> {
-  const startTime = Date.now();
-  const url = new URL(request.url);
-  const traceId = crypto.randomUUID();
-  const verboseLogging = /^(1|true|yes|on)$/i.test(String(env.LOG_VERBOSE ?? 'false'));
+  const startTime = Date.now()
+  const url = new URL(request.url)
+  const traceId = crypto.randomUUID()
+  const verboseLogging = /^(1|true|yes|on)$/i.test(String(env.LOG_VERBOSE ?? 'false'))
   let body: {
-    source_id?: string;
-    max_items?: number;
-    project_id?: string;
-  } = {};
+    source_id?: string
+    max_items?: number
+    project_id?: string
+  } = {}
 
   const logRun = (event: string, details: Record<string, unknown> = {}) => {
     if (!verboseLogging && event !== 'run.summary') {
-      return;
+      return
     }
 
     console.log(JSON.stringify({
@@ -1593,32 +1593,32 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       trace_id: traceId,
       elapsed_ms: Date.now() - startTime,
       ...details
-    }));
-  };
-
-  try {
-    body = await request.json();
-  } catch {
-    body = {};
+    }))
   }
 
-  const sourceId = (body.source_id || url.searchParams.get('source_id') || '').trim() || null;
-  const bodyMaxItems = Number.isFinite(Number(body.max_items)) ? Number(body.max_items) : null;
+  try {
+    body = await request.json()
+  } catch {
+    body = {}
+  }
+
+  const sourceId = (body.source_id || url.searchParams.get('source_id') || '').trim() || null
+  const bodyMaxItems = Number.isFinite(Number(body.max_items)) ? Number(body.max_items) : null
   const maxItems = Math.max(
     1,
     Math.min(
       bodyMaxItems ?? parseInt(url.searchParams.get('max_items') || '10', 10),
       500
     )
-  );
-  const projectId = (body.project_id || url.searchParams.get('project_id') || '').trim();
+  )
+  const projectId = (body.project_id || url.searchParams.get('project_id') || '').trim()
 
   logRun('run.request.received', {
     method: request.method,
     project_id: projectId || null,
     requested_source_id: sourceId,
     max_items: maxItems
-  });
+  })
 
   if (!projectId) {
     logRun('run.summary', {
@@ -1628,16 +1628,16 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       source_id: sourceId,
       items_processed: 0,
       events_written: 0
-    });
-    logRun('run.request.invalid', { reason: 'project_id_missing' });
+    })
+    logRun('run.request.invalid', { reason: 'project_id_missing' })
     return new Response(JSON.stringify({ error: 'project_id is required' }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
+
   // Get scoped config
-  const configResult = await readConfig(env, projectId);
+  const configResult = await readConfig(env, projectId)
   if (configResult.error || !configResult.config) {
     logRun('run.summary', {
       status: 'invalid',
@@ -1646,28 +1646,28 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       source_id: sourceId,
       items_processed: 0,
       events_written: 0
-    });
+    })
     logRun('run.request.invalid', {
       reason: 'project_not_found',
       project_id: projectId,
       error: configResult.error || null
-    });
-    return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), { 
+    })
+    return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
-  const config = configResult.config;
 
-  const isSourceEnabled = (source: { enabled?: boolean }) => source.enabled !== false;
-  const enabledSources = config.sources.filter(isSourceEnabled);
+  const config = configResult.config
+
+  const isSourceEnabled = (source: { enabled?: boolean }) => source.enabled !== false
+  const enabledSources = config.sources.filter(isSourceEnabled)
 
   logRun('run.config.loaded', {
     project_id: config.project_id,
     total_sources: config.sources.length,
     enabled_sources: enabledSources.length
-  });
+  })
 
   if (enabledSources.length === 0) {
     logRun('run.summary', {
@@ -1677,11 +1677,11 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       source_id: sourceId,
       items_processed: 0,
       events_written: 0
-    });
+    })
     logRun('run.request.invalid', {
       reason: 'no_enabled_sources',
       project_id: config.project_id
-    });
+    })
     return new Response(JSON.stringify({
       error: 'No enabled sources found for this project',
       available_sources: config.sources.map((s) => ({
@@ -1691,17 +1691,17 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
+
   // Find source config
-  const sourceConfig = enabledSources.find((s) => 
+  const sourceConfig = enabledSources.find((s) =>
     sourceId ? s.id === sourceId : true
-  );
+  )
 
   const requestedSource = sourceId
     ? config.sources.find((s) => s.id === sourceId)
-    : null;
+    : null
 
   if (sourceId && requestedSource && !isSourceEnabled(requestedSource)) {
     logRun('run.summary', {
@@ -1711,12 +1711,12 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       source_id: sourceId,
       items_processed: 0,
       events_written: 0
-    });
+    })
     logRun('run.request.invalid', {
       reason: 'requested_source_paused',
       project_id: config.project_id,
       source_id: sourceId
-    });
+    })
     return new Response(JSON.stringify({
       error: `Source is paused: ${sourceId}`,
       source_id: sourceId,
@@ -1724,9 +1724,9 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
     }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
+
   if (!sourceConfig) {
     logRun('run.summary', {
       status: 'invalid',
@@ -1735,37 +1735,37 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       source_id: sourceId,
       items_processed: 0,
       events_written: 0
-    });
+    })
     logRun('run.request.invalid', {
       reason: 'source_not_found',
       project_id: config.project_id,
       requested_source_id: sourceId
-    });
-    return new Response(JSON.stringify({ 
+    })
+    return new Response(JSON.stringify({
       error: 'No source found',
       available_sources: enabledSources.map((s) => s.id)
-    }), { 
+    }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
+
   // Create source based on plugin type
-  let source;
-  const pluginType = sourceConfig.plugin;
-  const sourceConfigData = (sourceConfig.config || {}) as Record<string, unknown>;
+  let source
+  const pluginType = sourceConfig.plugin
+  const sourceConfigData = (sourceConfig.config || {}) as Record<string, unknown>
 
   logRun('run.source.selected', {
     project_id: config.project_id,
     source_id: sourceConfig.id,
     source_plugin: pluginType
-  });
-  
+  })
+
   if (pluginType === 'rss_source' || pluginType === 'rss' || pluginType === 'hacker-news') {
     source = new RSSSource({
       feed_url: (sourceConfigData.feed_url as string) || 'https://hnrss.org/frontpage',
       user_agent: 'Delta-Curator/1.0'
-    });
+    })
   } else {
     logRun('run.summary', {
       status: 'invalid',
@@ -1774,47 +1774,47 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       source_id: sourceConfig.id,
       items_processed: 0,
       events_written: 0
-    });
+    })
     logRun('run.request.invalid', {
       reason: 'unsupported_source_plugin',
       project_id: config.project_id,
       source_id: sourceConfig.id,
       source_plugin: pluginType
-    });
-    return new Response(JSON.stringify({ 
-      error: `Unsupported source plugin: ${pluginType}` 
-    }), { 
+    })
+    return new Response(JSON.stringify({
+      error: `Unsupported source plugin: ${pluginType}`
+    }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
-  
-  const scopedSourceStateId = makeScopedSourceStateId(config.project_id, sourceConfig.id);
+
+  const scopedSourceStateId = makeScopedSourceStateId(config.project_id, sourceConfig.id)
 
   // Create plugins
-  const comparator = new FingerprintComparator();
-  const decider = new RulesDecider();
-  let rssMetrics: Record<string, number> | undefined;
-  let rankingEnabledForRun = false;
-  let rankingQueryPresentForRun = false;
-  let rankingAppliedForRun = false;
-  let rankingScoredItemsForRun = 0;
-  let cursorBefore: string | null = null;
-  let cursorAfter: string | null = null;
-  
+  const comparator = new FingerprintComparator()
+  const decider = new RulesDecider()
+  let rssMetrics: Record<string, number> | undefined
+  let rankingEnabledForRun = false
+  let rankingQueryPresentForRun = false
+  let rankingAppliedForRun = false
+  let rankingScoredItemsForRun = 0
+  let cursorBefore: string | null = null
+  let cursorAfter: string | null = null
+
   try {
-    await ensureCommitsProjectScopeSchema(env);
-    await ensureProcessedUrlsSchema(env);
-    const commitColumns = await getTableColumns(env, 'commits');
-    const sourceStateColumns = await getTableColumns(env, 'source_state');
-    const curatedDocColumns = await getTableColumns(env, 'curated_docs');
+    await ensureCommitsProjectScopeSchema(env)
+    await ensureProcessedUrlsSchema(env)
+    const commitColumns = await getTableColumns(env, 'commits')
+    const sourceStateColumns = await getTableColumns(env, 'source_state')
+    const curatedDocColumns = await getTableColumns(env, 'curated_docs')
 
     // Get source state
-    const sourceState = await readSourceStateWithFallback(env, config.project_id, sourceConfig.id);
-    
+    const sourceState = await readSourceStateWithFallback(env, config.project_id, sourceConfig.id)
+
     // Read batch from source
-    const batchResult = await source.readBatch(sourceState, maxItems);
-    
+    const batchResult = await source.readBatch(sourceState, maxItems)
+
     if (!batchResult) {
       logRun('run.summary', {
         status: 'empty_batch',
@@ -1822,14 +1822,14 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         source_id: sourceConfig.id,
         items_processed: 0,
         events_written: 0
-      });
+      })
       logRun('run.batch.empty', {
         project_id: config.project_id,
         source_id: sourceConfig.id,
         items_processed: 0,
         events_written: 0
-      });
-      return new Response(JSON.stringify({ 
+      })
+      return new Response(JSON.stringify({
         commit_id: null,
         trace_id: traceId,
         items_processed: 0,
@@ -1838,13 +1838,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         message: 'No new items to process'
       }), {
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
-    
-    const items = batchResult.items;
+
+    const items = batchResult.items
     const processedItems = items.map((item) => {
-      const payload = (item.payload || {}) as Record<string, unknown>;
-      const targetUrl = extractTargetUrl(item.payload);
+      const payload = (item.payload || {}) as Record<string, unknown>
+      const targetUrl = extractTargetUrl(item.payload)
       return {
         source_item_id: item.source_item_id,
         title: typeof payload.title === 'string' ? payload.title : null,
@@ -1855,44 +1855,46 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         rank_score: null as number | null,
         rerank_query: null as string | null,
         rerank_input: null as string | null
-      };
-    });
-    rssMetrics = extractRssSummaryMetrics(pluginType, batchResult as { items: unknown[]; newState: unknown; diagnostics?: unknown });
+      }
+    })
+    rssMetrics = extractRssSummaryMetrics(pluginType, batchResult as { items: unknown[]; newState: unknown; diagnostics?: unknown })
     cursorBefore = typeof (sourceState as Record<string, unknown>)?.cursorPublishedAt === 'string'
       ? (sourceState as Record<string, unknown>).cursorPublishedAt as string
-      : null;
+      : null
     cursorAfter = typeof (batchResult.newState as Record<string, unknown>)?.cursorPublishedAt === 'string'
       ? (batchResult.newState as Record<string, unknown>).cursorPublishedAt as string
-      : null;
+      : null
 
-    const ingestRanking = config.pipeline?.ranking?.ingest;
+    const ingestRanking = config.pipeline?.ranking?.ingest
     const rankingEnabled = Boolean(
       ingestRanking?.enabled &&
       ingestRanking?.backend === 'workers_ai_rerank' &&
       env.AI
-    );
+    )
+    const rules = (config.pipeline?.decider?.config as { rules?: unknown })?.rules
+    const rulesQuery = Array.isArray(rules) ? rules.join(', ') : ''
     const rankingQuery = typeof ingestRanking?.query === 'string' && ingestRanking.query.trim().length > 0
       ? ingestRanking.query.trim()
-      : (config.topic?.label || '').trim();
+      : (rulesQuery || config.topic?.label || '').trim()
     const rankingModel = typeof ingestRanking?.model === 'string' && ingestRanking.model.trim().length > 0
       ? ingestRanking.model.trim()
-      : '@cf/baai/bge-reranker-base';
+      : '@cf/baai/bge-reranker-base'
     const rankingMaxPassageChars = Number.isInteger(ingestRanking?.max_passage_chars)
       ? Math.max(256, Math.min(Number(ingestRanking?.max_passage_chars), 12000))
-      : 4000;
-    const rankingThreshold = 0.2;
-    const rankScoresByItem = new Map<string, number>();
-    let rankingApplied = false;
+      : 4000
+    const rankingThreshold = 0.2
+    const rankScoresByItem = new Map<string, number>()
+    let rankingApplied = false
 
     if (rankingEnabled && rankingQuery) {
       for (let i = 0; i < items.length; i++) {
-        processedItems[i].rerank_query = rankingQuery;
-        processedItems[i].rerank_input = buildRerankPassage(items[i].payload, rankingMaxPassageChars);
+        processedItems[i].rerank_query = rankingQuery
+        processedItems[i].rerank_input = buildRerankPassage(items[i].payload, rankingMaxPassageChars)
       }
     }
 
-    rankingEnabledForRun = rankingEnabled;
-    rankingQueryPresentForRun = Boolean(rankingQuery);
+    rankingEnabledForRun = rankingEnabled
+    rankingQueryPresentForRun = Boolean(rankingQuery)
 
     logRun('run.ranking.config', {
       project_id: config.project_id,
@@ -1904,36 +1906,36 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       ranking_max_passage_chars: rankingMaxPassageChars,
       ranking_threshold: rankingThreshold,
       item_count: items.length
-    });
+    })
 
     if (rankingEnabled && rankingQuery) {
       const passages = items.map((item) => ({
         id: item.source_item_id,
         text: buildRerankPassage(item.payload, rankingMaxPassageChars)
-      }));
+      }))
 
       if (passages.length === 0) {
         logRun('run.ranking.skipped', {
           project_id: config.project_id,
           source_id: sourceConfig.id,
           reason: 'no_items'
-        });
+        })
       } else {
-        const ranker = new WorkersAIRanker(env.AI, rankingQuery, rankingModel, rankingMaxPassageChars);
-        const scores = await ranker.score(passages);
+        const ranker = new WorkersAIRanker(env.AI, rankingQuery, rankingModel, rankingMaxPassageChars)
+        const scores = await ranker.score(passages)
         if (scores.length === passages.length) {
           for (const score of scores) {
-            rankScoresByItem.set(score.id, score.score);
+            rankScoresByItem.set(score.id, score.score)
           }
-          rankingApplied = true;
-          rankingAppliedForRun = true;
-          rankingScoredItemsForRun = scores.length;
+          rankingApplied = true
+          rankingAppliedForRun = true
+          rankingScoredItemsForRun = scores.length
 
           logRun('run.ranking.completed', {
             project_id: config.project_id,
             source_id: sourceConfig.id,
             scored_items: scores.length
-          });
+          })
         } else {
           logRun('run.ranking.fallback', {
             project_id: config.project_id,
@@ -1941,34 +1943,34 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
             reason: 'scoring_failed_or_incomplete',
             scored_items: scores.length,
             expected_items: passages.length
-          });
+          })
         }
       }
     }
-    
+
     // Process each item
-    const events: any[] = [];
-    const now = new Date().toISOString();
-    let skippedExisting = 0;
-    let skippedLowRank = 0;
-    let skippedByDecision = 0;
+    const events: any[] = []
+    const now = new Date().toISOString()
+    let skippedExisting = 0
+    let skippedLowRank = 0
+    let skippedByDecision = 0
     const shouldLogLoopIteration = (index: number, total: number) => {
-      if (total <= 25) return true;
-      if (index < 5) return true;
-      if (index === total - 1) return true;
-      return (index + 1) % 25 === 0;
-    };
+      if (total <= 25) return true
+      if (index < 5) return true
+      if (index === total - 1) return true
+      return (index + 1) % 25 === 0
+    }
 
     logRun('run.loop.started', {
       project_id: config.project_id,
       source_id: sourceConfig.id,
       total_items: items.length
-    });
-    
+    })
+
     for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const payload = item.payload as Record<string, unknown>;
-      const targetUrl = processedItems[i].url;
+      const item = items[i]
+      const payload = item.payload as Record<string, unknown>
+      const targetUrl = processedItems[i].url
 
       if (targetUrl) {
         const alreadyProcessedUrl = await env.DB.prepare(
@@ -1976,10 +1978,10 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
            FROM processed_urls
            WHERE project_id = ? AND source_id = ? AND target_url = ?
            LIMIT 1`
-        ).bind(config.project_id, sourceConfig.id, targetUrl).first();
+        ).bind(config.project_id, sourceConfig.id, targetUrl).first()
 
         if (alreadyProcessedUrl) {
-          processedItems[i].outcome = 'skipped_already_processed_url';
+          processedItems[i].outcome = 'skipped_already_processed_url'
           if (shouldLogLoopIteration(i, items.length)) {
             logRun('run.loop.iteration', {
               project_id: config.project_id,
@@ -1989,29 +1991,29 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
               source_item_id: item.source_item_id,
               outcome: 'skipped_already_processed_url',
               target_url: targetUrl
-            });
+            })
           }
-          continue;
+          continue
         }
 
         await env.DB.prepare(
           `INSERT INTO processed_urls (project_id, source_id, target_url, first_seen_at)
            VALUES (?, ?, ?, ?)
            ON CONFLICT(project_id, source_id, target_url) DO NOTHING`
-        ).bind(config.project_id, sourceConfig.id, targetUrl, now).run();
+        ).bind(config.project_id, sourceConfig.id, targetUrl, now).run()
       }
-      
+
       // Generate event ID (simplified - should use proper dual-hash)
-      const eventId = await sha256Base64(`${item.source_item_id}:${canonicalJson(payload)}`);
-      
+      const eventId = await sha256Base64(`${item.source_item_id}:${canonicalJson(payload)}`)
+
       // Check for existing event
       const existing = await env.DB.prepare(
         'SELECT event_id FROM events WHERE event_id = ?'
-      ).bind(eventId).first();
-      
+      ).bind(eventId).first()
+
       if (existing) {
-        processedItems[i].outcome = 'skipped_existing';
-        skippedExisting += 1;
+        processedItems[i].outcome = 'skipped_existing'
+        skippedExisting += 1
         if (shouldLogLoopIteration(i, items.length)) {
           logRun('run.loop.iteration', {
             project_id: config.project_id,
@@ -2020,17 +2022,17 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
             total_items: items.length,
             source_item_id: item.source_item_id,
             outcome: 'skipped_existing'
-          });
+          })
         }
-        continue; // Skip duplicate
+        continue // Skip duplicate
       }
 
       if (rankingApplied) {
-        const rankScore = rankScoresByItem.get(item.source_item_id) ?? 0;
+        const rankScore = rankScoresByItem.get(item.source_item_id) ?? 0
         if (rankScore < rankingThreshold) {
-          processedItems[i].outcome = 'skipped_low_rank';
-          processedItems[i].rank_score = rankScore;
-          skippedLowRank += 1;
+          processedItems[i].outcome = 'skipped_low_rank'
+          processedItems[i].rank_score = rankScore
+          skippedLowRank += 1
           if (shouldLogLoopIteration(i, items.length)) {
             logRun('run.loop.iteration', {
               project_id: config.project_id,
@@ -2040,12 +2042,12 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
               source_item_id: item.source_item_id,
               outcome: 'skipped_low_rank',
               rank_score: rankScore
-            });
+            })
           }
-          continue;
+          continue
         }
       }
-      
+
       // Prepare candidate doc
       const candidateDoc = {
         trace_id: traceId,
@@ -2053,31 +2055,31 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         candidate_seq: i,
         observed_at: now,
         payload: item.payload
-      };
-      
+      }
+
       // Get fingerprints for comparison
       const { results: fingerprints } = await env.DB.prepare(
         'SELECT fingerprint as payload_hash, first_event_id as event_id FROM fingerprint_index LIMIT 1000'
-      ).all<{ payload_hash: string; event_id: string }>();
-      
+      ).all<{ payload_hash: string; event_id: string }>()
+
       // Build base views
       const baseViews = [{
         viewName: 'fingerprint_index',
         state: { fingerprints: fingerprints || [] }
-      }];
-      
+      }]
+
       // Compare with existing documents
-      const compareResult = await comparator.compare(candidateDoc, baseViews);
-      
+      const compareResult = await comparator.compare(candidateDoc, baseViews)
+
       // Make decision
-      const decision = await decider.decide(candidateDoc, compareResult);
-      
+      const decision = await decider.decide(candidateDoc, compareResult)
+
       // Only process if append (accept)
       if (decision.decision !== 'append') {
-        processedItems[i].outcome = 'skipped_decision';
-        processedItems[i].decision = decision.decision;
-        processedItems[i].decision_reason = decision.reason || null;
-        skippedByDecision += 1;
+        processedItems[i].outcome = 'skipped_decision'
+        processedItems[i].decision = decision.decision
+        processedItems[i].decision_reason = decision.reason || null
+        skippedByDecision += 1
         if (shouldLogLoopIteration(i, items.length)) {
           logRun('run.loop.iteration', {
             project_id: config.project_id,
@@ -2087,13 +2089,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
             source_item_id: item.source_item_id,
             outcome: 'skipped_decision',
             decision: decision.decision
-          });
+          })
         }
-        continue;
+        continue
       }
-      
+
       // Create event
-      const payloadHash = await sha256Base64(canonicalJson(item.payload));
+      const payloadHash = await sha256Base64(canonicalJson(item.payload))
       const event = {
         event_type: 'doc_observed',
         event_version: '1.0',
@@ -2106,10 +2108,10 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         candidate_seq: i,
         observed_at: now,
         payload: item.payload
-      };
-      
-      events.push(event);
-      processedItems[i].outcome = 'event_created';
+      }
+
+      events.push(event)
+      processedItems[i].outcome = 'event_created'
 
       if (shouldLogLoopIteration(i, items.length)) {
         logRun('run.loop.iteration', {
@@ -2119,7 +2121,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
           total_items: items.length,
           source_item_id: item.source_item_id,
           outcome: 'event_created'
-        });
+        })
       }
     }
 
@@ -2131,8 +2133,8 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       skipped_existing: skippedExisting,
       skipped_low_rank: skippedLowRank,
       skipped_by_decision: skippedByDecision
-    });
-    
+    })
+
     if (events.length === 0) {
       logRun('run.summary', {
         status: 'no_novel_events',
@@ -2150,7 +2152,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         ranking_applied: rankingAppliedForRun,
         ranking_scored_items: rankingScoredItemsForRun,
         rss_metrics: rssMetrics
-      });
+      })
       logRun('run.processing.no_novel_events', {
         project_id: config.project_id,
         source_id: sourceConfig.id,
@@ -2159,7 +2161,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         skipped_existing: skippedExisting,
         skipped_low_rank: skippedLowRank,
         skipped_by_decision: skippedByDecision
-      });
+      })
 
       // Update source state even if no new events
       const cursorCommit = await ensureCursorCommit(
@@ -2172,7 +2174,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         batchResult.newState,
         now,
         items.map((item) => item.source_item_id)
-      );
+      )
 
       if (sourceStateColumns.has('last_commit_id') && sourceStateColumns.has('last_commit_key')) {
         await upsertSourceState(
@@ -2182,7 +2184,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
           batchResult.newState,
           now,
           { commitId: cursorCommit.commitId, commitKey: cursorCommit.commitKey }
-        );
+        )
       } else {
         await upsertSourceState(
           env,
@@ -2190,10 +2192,10 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
           scopedSourceStateId,
           batchResult.newState,
           now
-        );
+        )
       }
-      
-      return new Response(JSON.stringify({ 
+
+      return new Response(JSON.stringify({
         commit_id: cursorCommit.commitId,
         trace_id: traceId,
         items_processed: items.length,
@@ -2203,21 +2205,21 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         message: 'No novel items to commit'
       }), {
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
-    
+
     // Generate commit ID
-    const commitId = crypto.randomUUID();
-    const oldStateJson = JSON.stringify(sourceState);
-    const newStateJson = JSON.stringify(batchResult.newState);
+    const commitId = crypto.randomUUID()
+    const oldStateJson = JSON.stringify(sourceState)
+    const newStateJson = JSON.stringify(batchResult.newState)
     const commitKey = await sha256Base64(
       `${config.project_id}:${sourceConfig.id}:${oldStateJson}:${events.map((e) => e.source_item_id).join('|')}`
-    );
+    )
     // Create commit record first (events has FK -> commits)
     if (commitColumns.has('source_state')) {
       if (commitColumns.has('project_id')) {
         await env.DB.prepare(
-          `INSERT INTO commits 
+          `INSERT INTO commits
            (commit_id, trace_id, source_id, project_id, source_state, item_count, event_count, committed_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(
@@ -2229,10 +2231,10 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
           items.length,
           events.length,
           now
-        ).run();
+        ).run()
       } else {
         await env.DB.prepare(
-          `INSERT INTO commits 
+          `INSERT INTO commits
            (commit_id, trace_id, source_id, source_state, item_count, event_count, committed_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`
         ).bind(
@@ -2243,7 +2245,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
           items.length,
           events.length,
           now
-        ).run();
+        ).run()
       }
     } else if (
       commitColumns.has('commit_key') &&
@@ -2264,7 +2266,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
           oldStateJson,
           newStateJson,
           now
-        ).run();
+        ).run()
       } else {
         await env.DB.prepare(
           `INSERT INTO commits
@@ -2278,17 +2280,17 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
           oldStateJson,
           newStateJson,
           now
-        ).run();
+        ).run()
       }
     } else {
-      throw new Error('Unsupported commits table schema');
+      throw new Error('Unsupported commits table schema')
     }
-    
+
     // Write events to D1
     for (const event of events) {
       await env.DB.prepare(
-        `INSERT INTO events 
-         (event_id, commit_id, event_type, event_version, payload_hash, trace_id, 
+        `INSERT INTO events
+         (event_id, commit_id, event_type, event_version, payload_hash, trace_id,
           source_id, source_item_id, candidate_seq, observed_at, payload)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
@@ -2303,13 +2305,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         event.candidate_seq,
         event.observed_at,
         JSON.stringify(event.payload)
-      ).run();
-      
+      ).run()
+
       // Index facets if present
       if (event.payload.facets) {
         for (const facet of event.payload.facets) {
           await env.DB.prepare(
-            `INSERT INTO facet_index 
+            `INSERT INTO facet_index
              (facet_id, event_id, facet_key, facet_value)
              VALUES (?, ?, ?, ?)`
           ).bind(
@@ -2317,13 +2319,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
             event.event_id,
             facet.type || facet.key || 'facet',
             typeof facet.value === 'string' ? facet.value : JSON.stringify(facet.value ?? '')
-          ).run();
+          ).run()
         }
       }
-      
+
       // Index fingerprint
       await env.DB.prepare(
-        `INSERT OR IGNORE INTO fingerprint_index 
+        `INSERT OR IGNORE INTO fingerprint_index
          (fingerprint, source_item_id, payload_hash, first_event_id)
          VALUES (?, ?, ?, ?)`
       ).bind(
@@ -2331,13 +2333,13 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         event.source_item_id,
         event.payload_hash,
         event.event_id
-      ).run();
-      
+      ).run()
+
       // Add to curated_docs
-      const payload = event.payload as any;
+      const payload = event.payload as any
       const insertCuratedRich = () => env.DB.prepare(
-        `INSERT INTO curated_docs 
-         (doc_id, event_id, content_hash, rank_score, source_url, title, 
+        `INSERT INTO curated_docs
+         (doc_id, event_id, content_hash, rank_score, source_url, title,
           summary, entities, published_at, fetched_at, held, held_until)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
@@ -2353,7 +2355,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         now,
         0,
         null
-      ).run();
+      ).run()
 
       const insertCuratedLegacy = () => env.DB.prepare(
         `INSERT OR REPLACE INTO curated_docs
@@ -2364,26 +2366,26 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
         event.source_item_id,
         JSON.stringify(payload),
         event.event_id
-      ).run();
+      ).run()
 
       try {
         if (curatedDocColumns.has('event_id')) {
-          await insertCuratedRich();
+          await insertCuratedRich()
         } else {
-          await insertCuratedLegacy();
+          await insertCuratedLegacy()
         }
       } catch (err: any) {
-        const message = String(err?.message || err);
+        const message = String(err?.message || err)
         if (message.includes('no column named event_id')) {
-          await insertCuratedLegacy();
+          await insertCuratedLegacy()
         } else if (message.includes('no column named source_item_id')) {
-          await insertCuratedRich();
+          await insertCuratedRich()
         } else {
-          throw err;
+          throw err
         }
       }
     }
-    
+
     // Update source state
     await upsertSourceState(
       env,
@@ -2392,7 +2394,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       batchResult.newState,
       now,
       { commitId, commitKey }
-    );
+    )
 
     logRun('run.summary', {
       status: 'completed',
@@ -2411,7 +2413,7 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       ranking_applied: rankingAppliedForRun,
       ranking_scored_items: rankingScoredItemsForRun,
       rss_metrics: rssMetrics
-    });
+    })
 
     logRun('run.completed', {
       project_id: config.project_id,
@@ -2422,9 +2424,9 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       skipped_existing: skippedExisting,
       skipped_low_rank: skippedLowRank,
       skipped_by_decision: skippedByDecision
-    });
-    
-    return new Response(JSON.stringify({ 
+    })
+
+    return new Response(JSON.stringify({
       commit_id: commitId,
       trace_id: traceId,
       items_processed: items.length,
@@ -2436,8 +2438,8 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       took_ms: Date.now() - startTime
     }), {
       headers: { 'Content-Type': 'application/json' }
-    });
-    
+    })
+
   } catch (error: any) {
     logRun('run.summary', {
       status: 'failed',
@@ -2451,26 +2453,26 @@ async function handleRunRoute(env: Env, request: Request): Promise<Response> {
       ranking_applied: rankingAppliedForRun,
       ranking_scored_items: rankingScoredItemsForRun,
       rss_metrics: rssMetrics
-    });
+    })
     logRun('run.failed', {
       project_id: config.project_id,
       source_id: sourceConfig.id,
       error: error?.message || String(error)
-    });
+    })
 
-    return new Response(JSON.stringify({ 
+    return new Response(JSON.stringify({
       error: error.message || 'Run failed',
       trace_id: traceId
-    }), { 
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 async function handleInspectRoute(env: Env, request: Request): Promise<Response> {
-  const startTime = Date.now();
-  const traceId = crypto.randomUUID();
+  const startTime = Date.now()
+  const traceId = crypto.randomUUID()
   const logInspect = (event: string, details: Record<string, unknown> = {}) => {
     console.log(JSON.stringify({
       event,
@@ -2478,53 +2480,53 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
       trace_id: traceId,
       elapsed_ms: Date.now() - startTime,
       ...details
-    }));
-  };
+    }))
+  }
 
   try {
-    const url = new URL(request.url);
-    const since = url.searchParams.get('since') || 'PT24H';
-    const format = url.searchParams.get('format') || 'markdown';
-    const projectId = (url.searchParams.get('project_id') || '').trim();
+    const url = new URL(request.url)
+    const since = url.searchParams.get('since') || 'PT24H'
+    const format = url.searchParams.get('format') || 'markdown'
+    const projectId = (url.searchParams.get('project_id') || '').trim()
 
     logInspect('inspect.request.received', {
       method: request.method,
       since,
       format,
       project_id: projectId || null
-    });
+    })
 
     if (!projectId) {
-      logInspect('inspect.request.invalid', { reason: 'project_id_missing' });
+      logInspect('inspect.request.invalid', { reason: 'project_id_missing' })
       return new Response(JSON.stringify({ error: 'project_id is required' }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    let scopedProjectId: string | null = null;
-    let scopedSourceIds: string[] | null = null;
+    let scopedProjectId: string | null = null
+    let scopedSourceIds: string[] | null = null
 
-    const configResult = await readConfig(env, projectId);
+    const configResult = await readConfig(env, projectId)
     if (configResult.error || !configResult.config) {
       logInspect('inspect.request.invalid', {
         reason: 'project_not_found',
         project_id: projectId,
         error: configResult.error || null
-      });
+      })
       return new Response(JSON.stringify({ error: configResult.error || `Unknown project_id: ${projectId}` }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    scopedProjectId = configResult.config.project_id;
-    scopedSourceIds = configResult.config.sources.map((source) => source.id);
+    scopedProjectId = configResult.config.project_id
+    scopedSourceIds = configResult.config.sources.map((source) => source.id)
 
     logInspect('inspect.scope.loaded', {
       project_id: scopedProjectId,
       source_count: scopedSourceIds.length
-    });
+    })
 
     if (scopedSourceIds && scopedSourceIds.length === 0) {
       const markdown = [
@@ -2541,14 +2543,14 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
         '---',
         `Generated at ${new Date().toISOString()}`,
         ''
-      ].join('\n');
+      ].join('\n')
 
       if (format === 'json') {
         logInspect('inspect.completed', {
           project_id: scopedProjectId,
           format,
           source_count: 0
-        });
+        })
         return new Response(JSON.stringify({
           since,
           generated_at: new Date().toISOString(),
@@ -2557,22 +2559,22 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
           markdown
         }), {
           headers: { 'Content-Type': 'application/json' }
-        });
+        })
       }
 
       logInspect('inspect.completed', {
         project_id: scopedProjectId,
         format,
         source_count: 0
-      });
+      })
       return new Response(markdown, {
         headers: { 'Content-Type': 'text/markdown' }
-      });
+      })
     }
 
     const sourceStateLookupKeys = scopedSourceIds
       ? scopedSourceIds.flatMap((id) => [makeScopedSourceStateId(scopedProjectId || '', id), id])
-      : [];
+      : []
 
     const stateRows = sourceStateLookupKeys.length > 0
       ? await env.DB.prepare(
@@ -2585,18 +2587,18 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
         `SELECT source_id, state, updated_at
          FROM source_state
          ORDER BY updated_at DESC`
-      ).all<{ source_id: string; state: string; updated_at: string }>();
+      ).all<{ source_id: string; state: string; updated_at: string }>()
 
-    const rowsBySourceStateId = new Map((stateRows.results || []).map((row) => [row.source_id, row] as const));
+    const rowsBySourceStateId = new Map((stateRows.results || []).map((row) => [row.source_id, row] as const))
     const sources = configResult.config.sources.map((source) => {
-      const scopedKey = makeScopedSourceStateId(scopedProjectId || '', source.id);
-      const row = rowsBySourceStateId.get(scopedKey) ?? rowsBySourceStateId.get(source.id);
+      const scopedKey = makeScopedSourceStateId(scopedProjectId || '', source.id)
+      const row = rowsBySourceStateId.get(scopedKey) ?? rowsBySourceStateId.get(source.id)
 
-      let parsedState: Record<string, unknown> = {};
+      let parsedState: Record<string, unknown> = {}
       try {
-        parsedState = row?.state ? JSON.parse(row.state) : {};
+        parsedState = row?.state ? JSON.parse(row.state) : {}
       } catch {
-        parsedState = {};
+        parsedState = {}
       }
 
       const recentGuids = Array.isArray(parsedState.recentIds)
@@ -2605,7 +2607,7 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
           ? parsedState.recentGuids
           : Array.isArray(parsedState.processedGuids)
             ? parsedState.processedGuids
-            : [];
+            : []
 
       return {
         source_id: source.id,
@@ -2614,8 +2616,8 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
         last_fetch: typeof parsedState.lastFetch === 'string' ? parsedState.lastFetch : null,
         recent_guids_count: recentGuids.length,
         updated_at: row?.updated_at ?? null
-      };
-    });
+      }
+    })
 
     const markdownLines = [
       '# Delta-Curator Digest',
@@ -2626,33 +2628,33 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
       `- Project: ${scopedProjectId ?? 'all'}`,
       '',
       '## Source Cursors'
-    ];
+    ]
 
     if (sources.length === 0) {
-      markdownLines.push('- No source state found');
+      markdownLines.push('- No source state found')
     } else {
       for (const source of sources) {
-        markdownLines.push(`- ${source.source_id}`);
-        markdownLines.push(`  - status: ${source.enabled ? 'enabled' : 'paused'}`);
-        markdownLines.push(`  - cursorPublishedAt: ${source.cursor_published_at ?? 'n/a'}`);
-        markdownLines.push(`  - lastFetch: ${source.last_fetch ?? 'n/a'}`);
-        markdownLines.push(`  - recentGuids: ${source.recent_guids_count}`);
-        markdownLines.push(`  - stateUpdatedAt: ${source.updated_at ?? 'n/a'}`);
+        markdownLines.push(`- ${source.source_id}`)
+        markdownLines.push(`  - status: ${source.enabled ? 'enabled' : 'paused'}`)
+        markdownLines.push(`  - cursorPublishedAt: ${source.cursor_published_at ?? 'n/a'}`)
+        markdownLines.push(`  - lastFetch: ${source.last_fetch ?? 'n/a'}`)
+        markdownLines.push(`  - recentGuids: ${source.recent_guids_count}`)
+        markdownLines.push(`  - stateUpdatedAt: ${source.updated_at ?? 'n/a'}`)
       }
     }
 
-    markdownLines.push('');
-    markdownLines.push('---');
-    markdownLines.push(`Generated at ${new Date().toISOString()}`);
+    markdownLines.push('')
+    markdownLines.push('---')
+    markdownLines.push(`Generated at ${new Date().toISOString()}`)
 
-    const markdown = `${markdownLines.join('\n')}\n`;
+    const markdown = `${markdownLines.join('\n')}\n`
 
     if (format === 'json') {
       logInspect('inspect.completed', {
         project_id: scopedProjectId,
         format,
         source_count: sources.length
-      });
+      })
       return new Response(JSON.stringify({
         since,
         generated_at: new Date().toISOString(),
@@ -2661,37 +2663,37 @@ async function handleInspectRoute(env: Env, request: Request): Promise<Response>
         markdown
       }), {
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
     logInspect('inspect.completed', {
       project_id: scopedProjectId,
       format,
       source_count: sources.length
-    });
+    })
     return new Response(markdown, {
       headers: { 'Content-Type': 'text/markdown' }
-    });
+    })
   } catch (err: any) {
     logInspect('inspect.failed', {
       error: err?.message || String(err)
-    });
+    })
     return new Response(JSON.stringify({ error: err?.message || String(err) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 async function handleSearchRoute(env: Env, request: Request): Promise<Response> {
-  const startTime = Date.now();
-  const traceId = crypto.randomUUID();
-  const url = new URL(request.url);
-  const q = url.searchParams.get('q') || '';
-  const k = parseInt(url.searchParams.get('k') || '20', 10);
-  const rerank = url.searchParams.get('rerank') === 'true';
-  const projectId = (url.searchParams.get('project_id') || '').trim();
-  const sourceId = (url.searchParams.get('source_id') || '').trim();
+  const startTime = Date.now()
+  const traceId = crypto.randomUUID()
+  const url = new URL(request.url)
+  const q = url.searchParams.get('q') || ''
+  const k = parseInt(url.searchParams.get('k') || '20', 10)
+  const rerank = url.searchParams.get('rerank') === 'true'
+  const projectId = (url.searchParams.get('project_id') || '').trim()
+  const sourceId = (url.searchParams.get('source_id') || '').trim()
   const logSearch = (event: string, details: Record<string, unknown> = {}) => {
     console.log(JSON.stringify({
       event,
@@ -2699,8 +2701,8 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
       trace_id: traceId,
       elapsed_ms: Date.now() - startTime,
       ...details
-    }));
-  };
+    }))
+  }
 
   logSearch('search.request.received', {
     method: request.method,
@@ -2709,11 +2711,11 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
     rerank,
     project_id: projectId || null,
     source_id: sourceId || null
-  });
-  
+  })
+
   try {
     if (!projectId) {
-      logSearch('search.request.invalid', { reason: 'project_id_missing' });
+      logSearch('search.request.invalid', { reason: 'project_id_missing' })
       return new Response(JSON.stringify({
         error: 'project_id is required',
         query: q,
@@ -2725,18 +2727,18 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    let allowedSourceIds: string[] | null = null;
+    let allowedSourceIds: string[] | null = null
 
-    const configResult = await readConfig(env, projectId);
+    const configResult = await readConfig(env, projectId)
     if (configResult.error || !configResult.config) {
       logSearch('search.request.invalid', {
         reason: 'project_not_found',
         project_id: projectId,
         error: configResult.error || null
-      });
+      })
       return new Response(JSON.stringify({
         error: configResult.error || `Unknown project_id: ${projectId}`,
         query: q,
@@ -2748,14 +2750,14 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    allowedSourceIds = configResult.config.sources.map((source) => source.id);
+    allowedSourceIds = configResult.config.sources.map((source) => source.id)
     logSearch('search.scope.loaded', {
       project_id: projectId,
       source_count: allowedSourceIds.length
-    });
+    })
 
     if (sourceId) {
       if (!allowedSourceIds.includes(sourceId)) {
@@ -2763,7 +2765,7 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
           reason: 'source_not_in_project',
           project_id: projectId,
           source_id: sourceId
-        });
+        })
         return new Response(JSON.stringify({
           error: `source_id ${sourceId} is not part of project ${projectId}`,
           query: q,
@@ -2775,9 +2777,9 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
         }), {
           status: 400,
           headers: { 'Content-Type': 'application/json' }
-        });
+        })
       }
-      allowedSourceIds = [sourceId];
+      allowedSourceIds = [sourceId]
     }
 
     if (allowedSourceIds && allowedSourceIds.length === 0) {
@@ -2785,7 +2787,7 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
         project_id: projectId,
         source_id: sourceId || null,
         total: 0
-      });
+      })
       return new Response(JSON.stringify({
         query: q,
         k,
@@ -2797,28 +2799,28 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
         took_ms: Date.now() - startTime
       }), {
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const curatedDocColumns = await getTableColumns(env, 'curated_docs');
-    let docs: any[] = [];
-    const sourcePlaceholders = allowedSourceIds?.map(() => '?').join(', ') || '';
+    const curatedDocColumns = await getTableColumns(env, 'curated_docs')
+    let docs: any[] = []
+    const sourcePlaceholders = allowedSourceIds?.map(() => '?').join(', ') || ''
 
     const sourceFilterClause = allowedSourceIds
       ? ` AND e.source_id IN (${sourcePlaceholders})`
-      : '';
-    const sourceFilterBindings = allowedSourceIds ? [...allowedSourceIds] : [];
-    
+      : ''
+    const sourceFilterBindings = allowedSourceIds ? [...allowedSourceIds] : []
+
     if (curatedDocColumns.has('event_id')) {
       const richWhere = q
         ? `WHERE (cd.title LIKE ? OR cd.summary LIKE ? OR cd.source_url LIKE ?)`
-        : 'WHERE 1=1';
-      const richBindings: unknown[] = [];
+        : 'WHERE 1=1'
+      const richBindings: unknown[] = []
       if (q) {
-        richBindings.push(`%${q}%`, `%${q}%`, `%${q}%`);
+        richBindings.push(`%${q}%`, `%${q}%`, `%${q}%`)
       }
-      richBindings.push(...sourceFilterBindings);
-      richBindings.push(k);
+      richBindings.push(...sourceFilterBindings)
+      richBindings.push(k)
 
       const result = await env.DB.prepare(
         `SELECT
@@ -2842,7 +2844,7 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
          ${richWhere}${sourceFilterClause}
          ORDER BY cd.rank_score DESC, cd.fetched_at DESC
          LIMIT ?`
-      ).bind(...richBindings).all();
+      ).bind(...richBindings).all()
 
       docs = (result.results || []).map((row: any) => ({
         doc_id: row.doc_id,
@@ -2850,19 +2852,19 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
         payload: row.payload,
         last_event_id: row.last_event_id,
         source_id: row.source_id
-      }));
+      }))
     } else {
       const legacyWhere = q
         ? `WHERE (json_extract(cd.payload, '$.title') LIKE ?
              OR json_extract(cd.payload, '$.description') LIKE ?
              OR cd.source_item_id LIKE ?)`
-        : 'WHERE 1=1';
-      const legacyBindings: unknown[] = [];
+        : 'WHERE 1=1'
+      const legacyBindings: unknown[] = []
       if (q) {
-        legacyBindings.push(`%${q}%`, `%${q}%`, `%${q}%`);
+        legacyBindings.push(`%${q}%`, `%${q}%`, `%${q}%`)
       }
-      legacyBindings.push(...sourceFilterBindings);
-      legacyBindings.push(k);
+      legacyBindings.push(...sourceFilterBindings)
+      legacyBindings.push(k)
 
       const result = await env.DB.prepare(
         `SELECT
@@ -2876,7 +2878,7 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
          ${legacyWhere}${sourceFilterClause}
          ORDER BY e.observed_at DESC
          LIMIT ?`
-      ).bind(...legacyBindings).all();
+      ).bind(...legacyBindings).all()
 
       docs = (result.results || []).map((row: any) => ({
         doc_id: row.doc_id,
@@ -2884,37 +2886,37 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
         payload: row.payload,
         last_event_id: row.last_event_id,
         source_id: row.source_id
-      }));
+      }))
     }
-    
-    const tookMs = Date.now() - startTime;
+
+    const tookMs = Date.now() - startTime
 
     logSearch('search.completed', {
       project_id: projectId,
       source_id: sourceId || null,
       total: docs.length,
       took_ms: tookMs
-    });
-    
-    return new Response(JSON.stringify({ 
-      query: q, 
-      k, 
-      rerank, 
+    })
+
+    return new Response(JSON.stringify({
+      query: q,
+      k,
+      rerank,
       project_id: projectId || undefined,
       source_id: sourceId || undefined,
-      docs, 
-      total: docs.length, 
-      took_ms: tookMs 
+      docs,
+      total: docs.length,
+      took_ms: tookMs
     }), {
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   } catch (err: any) {
     logSearch('search.failed', {
       project_id: projectId || null,
       source_id: sourceId || null,
       error: err?.message || String(err)
-    });
-    return new Response(JSON.stringify({ 
+    })
+    return new Response(JSON.stringify({
       error: `Search failed: ${err.message || err}`,
       query: q,
       k,
@@ -2922,19 +2924,19 @@ async function handleSearchRoute(env: Env, request: Request): Promise<Response> 
       docs: [],
       total: 0,
       took_ms: Date.now() - startTime
-    }), { 
+    }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
-  const startTime = Date.now();
-  const url = new URL(request.url);
-  const projectId = (url.searchParams.get('project_id') || '').trim();
-  const sourceId = (url.searchParams.get('source_id') || '').trim();
-  const limit = Math.max(1, Math.min(parseInt(url.searchParams.get('limit') || '5', 10), 50));
+  const startTime = Date.now()
+  const url = new URL(request.url)
+  const projectId = (url.searchParams.get('project_id') || '').trim()
+  const sourceId = (url.searchParams.get('source_id') || '').trim()
+  const limit = Math.max(1, Math.min(parseInt(url.searchParams.get('limit') || '5', 10), 50))
 
   if (!projectId) {
     return new Response(JSON.stringify({
@@ -2945,12 +2947,12 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
     }), {
       status: 400,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 
   try {
-    await ensureCommitsProjectScopeSchema(env);
-    const configResult = await readConfig(env, projectId);
+    await ensureCommitsProjectScopeSchema(env)
+    const configResult = await readConfig(env, projectId)
     if (configResult.error || !configResult.config) {
       return new Response(JSON.stringify({
         error: configResult.error || `Unknown project_id: ${projectId}`,
@@ -2960,10 +2962,10 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
       }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    let allowedSourceIds = configResult.config.sources.map((source) => source.id);
+    let allowedSourceIds = configResult.config.sources.map((source) => source.id)
     if (sourceId) {
       if (!allowedSourceIds.includes(sourceId)) {
         return new Response(JSON.stringify({
@@ -2974,9 +2976,9 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
         }), {
           status: 400,
           headers: { 'Content-Type': 'application/json' }
-        });
+        })
       }
-      allowedSourceIds = [sourceId];
+      allowedSourceIds = [sourceId]
     }
 
     if (allowedSourceIds.length === 0) {
@@ -2989,26 +2991,26 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
         took_ms: Date.now() - startTime
       }), {
         headers: { 'Content-Type': 'application/json' }
-      });
+      })
     }
 
-    const commitColumns = await getTableColumns(env, 'commits');
+    const commitColumns = await getTableColumns(env, 'commits')
     const runAtExpression = commitColumns.has('committed_at')
       ? 'c.committed_at'
       : commitColumns.has('created_at')
         ? 'c.created_at'
-        : 'NULL';
+        : 'NULL'
     const eventCountExpression = commitColumns.has('event_count')
       ? 'c.event_count'
-      : '(SELECT COUNT(1) FROM events e WHERE e.commit_id = c.commit_id)';
+      : '(SELECT COUNT(1) FROM events e WHERE e.commit_id = c.commit_id)'
     const itemCountExpression = commitColumns.has('item_count')
       ? 'c.item_count'
-      : eventCountExpression;
+      : eventCountExpression
     const projectFilterClause = commitColumns.has('project_id')
       ? 'AND c.project_id = ?'
-      : '';
+      : ''
 
-    const placeholders = allowedSourceIds.map(() => '?').join(', ');
+    const placeholders = allowedSourceIds.map(() => '?').join(', ')
     const query = `
       SELECT
         c.commit_id,
@@ -3021,18 +3023,18 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
       WHERE c.source_id IN (${placeholders})
         ${projectFilterClause}
       ORDER BY ${runAtExpression === 'NULL' ? 'c.rowid' : 'run_at'} DESC
-      LIMIT ?`;
+      LIMIT ?`
 
     const { results } = await env.DB.prepare(query)
       .bind(...allowedSourceIds, ...(commitColumns.has('project_id') ? [projectId] : []), limit)
       .all<{
-        commit_id: string;
-        trace_id: string;
-        source_id: string;
-        item_count: number | null;
-        event_count: number | null;
-        run_at: string | null;
-      }>();
+        commit_id: string
+        trace_id: string
+        source_id: string
+        item_count: number | null
+        event_count: number | null
+        run_at: string | null
+      }>()
 
     const runs = (results || []).map((row) => ({
       commit_id: row.commit_id,
@@ -3041,7 +3043,7 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
       item_count: typeof row.item_count === 'number' ? row.item_count : null,
       event_count: typeof row.event_count === 'number' ? row.event_count : null,
       run_at: row.run_at
-    }));
+    }))
 
     return new Response(JSON.stringify({
       project_id: projectId,
@@ -3052,7 +3054,7 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
       took_ms: Date.now() - startTime
     }), {
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   } catch (err: any) {
     return new Response(JSON.stringify({
       error: `Runs query failed: ${err?.message || String(err)}`,
@@ -3062,28 +3064,28 @@ async function handleRunsRoute(env: Env, request: Request): Promise<Response> {
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
 async function handleHealthRoute(env: Env): Promise<Response> {
   try {
-    const lastCommit = await env.DB.prepare('SELECT commit_id FROM commits ORDER BY rowid DESC LIMIT 1').first<{ commit_id: string }>();
-    return new Response(JSON.stringify({ 
-      ok: true, 
-      version: '0.1.0', 
-      last_commit_id: lastCommit?.commit_id 
+    const lastCommit = await env.DB.prepare('SELECT commit_id FROM commits ORDER BY rowid DESC LIMIT 1').first<{ commit_id: string }>()
+    return new Response(JSON.stringify({
+      ok: true,
+      version: '0.1.0',
+      last_commit_id: lastCommit?.commit_id
     }), {
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   } catch (err) {
-    return new Response(JSON.stringify({ 
-      ok: false, 
-      error: String(err) 
+    return new Response(JSON.stringify({
+      ok: false,
+      error: String(err)
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
@@ -3207,37 +3209,37 @@ CREATE TABLE IF NOT EXISTS project_configs (
 );
 CREATE INDEX IF NOT EXISTS idx_project_configs_active ON project_configs(is_active);
 CREATE INDEX IF NOT EXISTS idx_project_configs_updated ON project_configs(updated_at);
-`;
+`
 
 async function handleInit(env: Env): Promise<Response> {
   try {
     // Execute schema statements one by one
     const statements = SCHEMA_DDL.split(';')
       .map(s => s.trim())
-      .filter(s => s.length > 0 && !s.startsWith('--'));
-    
+      .filter(s => s.length > 0 && !s.startsWith('--'))
+
     for (const stmt of statements) {
       try {
-        await env.DB.prepare(stmt).run();
+        await env.DB.prepare(stmt).run()
       } catch (e) {
         // Ignore "already exists" errors
         if (!String(e).includes('already exists')) {
-          console.warn(`Statement failed: ${stmt.slice(0, 50)}... Error: ${e}`);
+          console.warn(`Statement failed: ${stmt.slice(0, 50)}... Error: ${e}`)
         }
       }
     }
 
-    await ensureCommitsProjectScopeSchema(env);
-    await ensureProcessedUrlsSchema(env);
-    
+    await ensureCommitsProjectScopeSchema(env)
+    await ensureProcessedUrlsSchema(env)
+
     return new Response(JSON.stringify({ success: true, message: 'Database initialized' }), {
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
-    });
+    })
   }
 }
 
@@ -3246,112 +3248,112 @@ async function handleInit(env: Env): Promise<Response> {
 // ============================================================================
 
 async function handleRequest(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const pathname = url.pathname.toLowerCase();
-  const method = request.method.toUpperCase();
-  
+  const url = new URL(request.url)
+  const pathname = url.pathname.toLowerCase()
+  const method = request.method.toUpperCase()
+
   // Init route (development only - remove in production)
   if (pathname === '/init' && method === 'POST') {
-    return handleInit(env);
+    return handleInit(env)
   }
-  
+
   // Auth routes
   if (pathname === '/api/auth/microsoft' && method === 'GET') {
-    return handleMicrosoftLogin(request, env);
+    return handleMicrosoftLogin(request, env)
   }
-  
+
   if (pathname === '/api/auth/microsoft/callback' && method === 'GET') {
-    return handleMicrosoftCallback(request, env);
+    return handleMicrosoftCallback(request, env)
   }
-  
+
   if (pathname === '/api/auth/logout' && method === 'POST') {
-    return handleLogout();
+    return handleLogout()
   }
-  
+
   if (pathname === '/api/auth/me' && method === 'GET') {
-    return handleMe(request, env);
+    return handleMe(request, env)
   }
-  
+
   // Admin auth routes
   if (pathname === '/api/auth/admin' && method === 'POST') {
-    return handleAdminLogin(request, env);
+    return handleAdminLogin(request, env)
   }
-  
+
   if (pathname === '/api/auth/admin/token' && method === 'POST') {
-    return handleAdminTokenAuth(request, env);
+    return handleAdminTokenAuth(request, env)
   }
-  
+
   // Config routes
   if (pathname === '/config' && method === 'GET') {
-    return handleConfigListRoute(env);
+    return handleConfigListRoute(env)
   }
-  
+
   if (pathname === '/config' && method === 'POST') {
-    return handleConfigWriteRoute(env, request);
+    return handleConfigWriteRoute(env, request)
   }
-  
+
   if (pathname === '/config/active' && method === 'GET') {
-    return handleConfigActiveRoute(env);
+    return handleConfigActiveRoute(env)
   }
 
   if (pathname === '/sources/cursor' && method === 'POST') {
-    return handleSourceCursorUpdateRoute(env, request);
+    return handleSourceCursorUpdateRoute(env, request)
   }
 
   if (pathname === '/sources/processed-urls/reset' && method === 'POST') {
-    return handleSourceProcessedUrlsResetRoute(env, request);
+    return handleSourceProcessedUrlsResetRoute(env, request)
   }
-  
+
   if (pathname.startsWith('/config/') && pathname.includes('/activate') && method === 'POST') {
-    const parts = pathname.split('/').filter(Boolean);
+    const parts = pathname.split('/').filter(Boolean)
     if (parts.length >= 2) {
-      return handleConfigActivateRoute(env, parts[1]);
+      return handleConfigActivateRoute(env, parts[1])
     }
   }
-  
+
   if (pathname.startsWith('/config/') && method === 'GET') {
-    const parts = pathname.split('/').filter(Boolean);
+    const parts = pathname.split('/').filter(Boolean)
     if (parts.length === 2 && parts[1] !== 'active') {
-      return handleConfigGetRoute(env, request, parts[1]);
+      return handleConfigGetRoute(env, request, parts[1])
     }
   }
-  
+
   if (pathname.startsWith('/config/') && method === 'DELETE') {
-    const parts = pathname.split('/').filter(Boolean);
+    const parts = pathname.split('/').filter(Boolean)
     if (parts.length === 2) {
-      return handleConfigDeleteRoute(env, parts[1]);
+      return handleConfigDeleteRoute(env, parts[1])
     }
   }
-  
+
   // Operation routes
   if (pathname === '/seed' && method === 'POST') {
-    return handleSeedRoute(env);
+    return handleSeedRoute(env)
   }
-  
+
   if (pathname === '/run' && method === 'POST') {
-    return handleRunRoute(env, request);
+    return handleRunRoute(env, request)
   }
-  
+
   if (pathname === '/inspect' && method === 'GET') {
-    return handleInspectRoute(env, request);
+    return handleInspectRoute(env, request)
   }
-  
+
   if (pathname === '/search' && method === 'GET') {
-    return handleSearchRoute(env, request);
+    return handleSearchRoute(env, request)
   }
 
   if (pathname === '/runs' && method === 'GET') {
-    return handleRunsRoute(env, request);
+    return handleRunsRoute(env, request)
   }
-  
+
   if (pathname === '/health' && method === 'GET') {
-    return handleHealthRoute(env);
+    return handleHealthRoute(env)
   }
-  
-  return new Response(JSON.stringify({ error: 'Not found' }), { 
+
+  return new Response(JSON.stringify({ error: 'Not found' }), {
     status: 404,
     headers: { 'Content-Type': 'application/json' }
-  });
+  })
 }
 
 // ============================================================================
@@ -3361,14 +3363,14 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === 'OPTIONS') {
-      return handleCors(request, env);
+      return handleCors(request, env)
     }
-    
-    const response = await handleRequest(request, env);
-    return addCorsHeaders(response, request, env);
+
+    const response = await handleRequest(request, env)
+    return addCorsHeaders(response, request, env)
   },
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    console.log('Scheduled event triggered');
+    console.log('Scheduled event triggered')
   }
-};
+}
