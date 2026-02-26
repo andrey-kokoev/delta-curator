@@ -176,8 +176,9 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
       headers: { 'Content-Type': 'application/json' }
     });
   } catch (err) {
-    console.error(`Route error: ${err}`);
-    return new Response(JSON.stringify({ error: String(err) }), {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error(`Route error: ${errorMessage}`);
+    return new Response(JSON.stringify({ error: errorMessage || 'Unknown error' }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
@@ -774,7 +775,15 @@ async function handleProjectReview(request: Request, env: Env, projectId: string
  */
 async function handleProjectUpdate(request: Request, env: Env, projectId: string): Promise<Response> {
   try {
-    const body = await request.json() as { pinned?: boolean };
+    let body: { pinned?: boolean };
+    try {
+      body = await request.json() as { pinned?: boolean };
+    } catch (parseErr) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON body' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
     if (typeof body.pinned !== 'boolean') {
       return new Response(
