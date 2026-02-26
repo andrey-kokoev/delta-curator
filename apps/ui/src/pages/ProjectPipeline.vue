@@ -17,7 +17,7 @@
       <!-- Pipeline Stages -->
       <div class="rounded-lg border bg-card p-6 space-y-6">
         <h2 class="text-lg font-semibold">Pipeline Stages</h2>
-        
+
         <div class="grid gap-4 md:grid-cols-2">
           <div class="space-y-2">
             <label class="text-sm font-medium">Normalizer</label>
@@ -102,7 +102,7 @@
       <!-- Ranking -->
       <div class="rounded-lg border bg-card p-6 space-y-4">
         <h2 class="text-lg font-semibold">Ranking Configuration</h2>
-        
+
         <div class="space-y-4">
           <div class="flex items-center justify-between p-4 border rounded-lg">
             <div>
@@ -190,7 +190,7 @@ const router = useRouter()
 const apiStore = useApiStore()
 
 const projectId = route.params.id as string
-const project = ref<ProjectConfig | null>(null)
+const project = ref<ProjectConfig | null>(apiStore.projectCache[projectId]?.config || null)
 const pipeline = ref<PipelineConfig>({} as PipelineConfig)
 const loading = ref(true)
 const saving = ref(false)
@@ -209,7 +209,7 @@ async function loadProject() {
     const result = await apiStore.getConfig(projectId)
     project.value = result.config
     pipeline.value = { ...result.config.pipeline }
-    
+
     // Initialize config JSON
     normalizerConfig.value = JSON.stringify(pipeline.value.normalizer.config || {}, null, 2)
     extractorConfig.value = JSON.stringify(pipeline.value.extractor.config || {}, null, 2)
@@ -227,7 +227,7 @@ async function loadProject() {
 async function savePipeline() {
   try {
     saving.value = true
-    
+
     // Parse configs
     pipeline.value.normalizer.config = JSON.parse(normalizerConfig.value || '{}')
     pipeline.value.extractor.config = JSON.parse(extractorConfig.value || '{}')
@@ -235,7 +235,7 @@ async function savePipeline() {
     pipeline.value.comparator.config = JSON.parse(comparatorConfig.value || '{}')
     pipeline.value.decider.config = JSON.parse(deciderConfig.value || '{}')
     pipeline.value.merger.config = JSON.parse(mergerConfig.value || '{}')
-    
+
     if (project.value) {
       project.value.pipeline = pipeline.value
       await apiStore.saveConfig(project.value, false)

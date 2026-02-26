@@ -127,7 +127,7 @@ const router = useRouter()
 const apiStore = useApiStore()
 
 const projectId = route.params.id as string
-const project = ref<{ config: ProjectConfig; index: ProjectIndex } | null>(null)
+const project = ref<{ config: ProjectConfig; index: ProjectIndex } | null>(apiStore.projectCache[projectId] || null)
 const loading = ref(true)
 const deleting = ref(false)
 const sourceCursors = ref<Record<string, InspectSourceCursor>>({})

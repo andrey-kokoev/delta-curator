@@ -214,7 +214,7 @@ const route = useRoute()
 const apiStore = useApiStore()
 
 const projectId = route.params.id as string
-const project = ref<ProjectConfig | null>(null)
+const project = ref<ProjectConfig | null>(apiStore.projectCache[projectId]?.config || null)
 const sources = ref<SourceConfig[]>([])
 const sourceConfigJson = ref<string[]>([])
 const loading = ref(true)

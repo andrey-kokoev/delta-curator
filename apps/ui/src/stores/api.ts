@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { useAuthStore } from './auth'
-import type { 
-  ProjectConfig, 
-  ProjectIndex, 
-  SearchResult, 
+import type {
+  ProjectConfig,
+  ProjectIndex,
+  SearchResult,
   HealthStatus,
   RunResult,
   InspectResult,
@@ -26,11 +26,11 @@ export const useApiStore = defineStore('api', () => {
   async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
     isLoading.value = true
     error.value = null
-    
+
     try {
       const url = `${API_BASE}${path}`
       const authHeaders = getAuthHeaders()
-      
+
       const response = await fetch(url, {
         ...options,
         credentials: 'include',
@@ -40,12 +40,12 @@ export const useApiStore = defineStore('api', () => {
           ...options?.headers
         }
       })
-      
+
       if (!response.ok) {
         const err = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(err.error || `HTTP ${response.status}`)
       }
-      
+
       return await response.json()
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Unknown error'
@@ -55,20 +55,28 @@ export const useApiStore = defineStore('api', () => {
     }
   }
 
+  const projectCache = ref<Record<string, { config: ProjectConfig; index: ProjectIndex }>>({})
+
   // Config API
   async function listConfigs(): Promise<{ configs: ProjectIndex[] }> {
     return fetchApi('/config')
   }
 
   async function getConfig(projectId: string): Promise<{ config: ProjectConfig; index: ProjectIndex }> {
-    return fetchApi(`/config/${projectId}`)
+    const res = await fetchApi<{ config: ProjectConfig; index: ProjectIndex }>(`/config/${projectId}`)
+    projectCache.value[projectId] = res
+    return res
   }
 
   async function getActiveConfig(): Promise<{ config: ProjectConfig; index: ProjectIndex }> {
-    return fetchApi('/config/active')
+    const res = await fetchApi<{ config: ProjectConfig; index: ProjectIndex }>('/config/active')
+    if (res.config?.project_id) {
+      projectCache.value[res.config.project_id] = res
+    }
+    return res
   }
 
-  async function saveConfig(config: ProjectConfig, activate = false): Promise<{ 
+  async function saveConfig(config: ProjectConfig, activate = false): Promise<{
     success: boolean
     project_id: string
     r2_key: string
@@ -81,14 +89,14 @@ export const useApiStore = defineStore('api', () => {
     })
   }
 
-  async function activateConfig(projectId: string): Promise<{ 
+  async function activateConfig(projectId: string): Promise<{
     success: boolean
     project_id: string
   }> {
     return fetchApi(`/config/${projectId}/activate`, { method: 'POST' })
   }
 
-  async function deleteConfig(projectId: string): Promise<{ 
+  async function deleteConfig(projectId: string): Promise<{
     success: boolean
     project_id: string
   }> {
@@ -250,6 +258,7 @@ export const useApiStore = defineStore('api', () => {
   return {
     isLoading,
     error,
+    projectCache,
     listConfigs,
     getConfig,
     getActiveConfig,

@@ -121,7 +121,7 @@ const since = ref('PT24H')
 const loading = ref(false)
 const digest = ref<string | null>(null)
 const sources = ref<InspectSourceCursor[]>([])
-const project = ref<{ config: ProjectConfig } | null>(null)
+const project = ref<{ config: ProjectConfig } | null>(projectId ? apiStore.projectCache[projectId] : null)
 const cursorInputs = ref<Record<string, string>>({})
 const updatingSourceId = ref<string | null>(null)
 
@@ -203,7 +203,7 @@ async function clearCursor(sourceId: string) {
 
 function downloadDigest() {
   if (!digest.value) return
-  
+
   const blob = new Blob([digest.value], { type: 'text/markdown' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

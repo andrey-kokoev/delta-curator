@@ -80,13 +80,14 @@ import ProjectSubnav from '@/components/ProjectSubnav.vue'
 import type { CuratedDoc, ProjectConfig } from '@/types'
 
 const docs = ref<CuratedDoc[]>([])
-const loading = ref(true)
-const selectedDoc = ref<CuratedDoc | null>(null)
-const filters = ref({ sourceId: '' })
-const project = ref<{ config: ProjectConfig } | null>(null)
 const route = useRoute()
 const apiStore = useApiStore()
 const projectId = route.params.id as string | undefined
+
+const loading = ref(true)
+const selectedDoc = ref<CuratedDoc | null>(null)
+const filters = ref({ sourceId: '' })
+const project = ref<{ config: ProjectConfig } | null>(projectId ? apiStore.projectCache[projectId] : null)
 
 async function loadProjectContext() {
   if (!projectId) return

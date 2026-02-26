@@ -101,7 +101,7 @@ const k = ref(20)
 const rerank = ref(true)
 const searching = ref(false)
 const results = ref<SearchResult | null>(null)
-const project = ref<{ config: ProjectConfig } | null>(null)
+const project = ref<{ config: ProjectConfig } | null>(projectId ? apiStore.projectCache[projectId] : null)
 
 async function loadProjectContext() {
   if (!projectId) return
@@ -114,7 +114,7 @@ async function loadProjectContext() {
 
 async function performSearch() {
   if (!query.value.trim()) return
-  
+
   try {
     searching.value = true
     results.value = await apiStore.searchScoped(query.value, {

@@ -95,7 +95,7 @@
     <!-- Results -->
     <div v-if="result" class="rounded-lg border bg-card p-6 space-y-4">
       <h2 class="text-lg font-semibold">Results</h2>
-      
+
       <div class="grid gap-4 md:grid-cols-3">
         <div class="p-4 bg-muted rounded-lg text-center">
           <p class="text-2xl font-bold">{{ result.items_processed }}</p>
@@ -182,7 +182,7 @@ const route = useRoute()
 
 const projectId = route.params.id as string | undefined
 
-const activeProject = ref<{ config: ProjectConfig } | null>(null)
+const activeProject = ref<{ config: ProjectConfig } | null>(projectId ? apiStore.projectCache[projectId] : null)
 const sourceId = ref('')
 const maxItems = ref(50)
 const running = ref(false)
@@ -295,7 +295,7 @@ async function runBatch() {
   if (!sourceId.value) return
   const effectiveProjectId = getEffectiveProjectId()
   if (!effectiveProjectId) return
-  
+
   try {
     running.value = true
     result.value = await apiStore.runBatch(sourceId.value, maxItems.value, effectiveProjectId)
