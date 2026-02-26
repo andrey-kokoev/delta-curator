@@ -99,6 +99,9 @@ export interface ProjectIndex {
   hash: string
   created_at: string
   updated_at: string
+  // Dashboard fields (enriched from R2)
+  topic_label?: string
+  sources_count?: number
   last_reviewed_at?: string | null
   pinned?: boolean
   last_activity_at?: string | null

@@ -222,9 +222,22 @@ function setWindowMode(mode: '24h' | '7d' | 'since_review') {
 async function loadProjects() {
   loadingProjects.value = true
   try {
-    const result = await apiStore.listProjects()
-    projects.value = result.projects
-    stats.value.projects = result.projects.length
+    // Use listConfigs (GET /config) which now returns enriched data
+    const result = await apiStore.listConfigs()
+    
+    // Transform ProjectIndex[] to ProjectListItem[]
+    const projectItems: ProjectListItem[] = result.configs.map((config) => ({
+      project_id: config.project_id,
+      project_name: config.project_name,
+      topic_label: config.topic_label || 'Unknown',
+      sources_count: config.sources_count || 0,
+      pinned: config.pinned || false,
+      last_reviewed_at: config.last_reviewed_at || null,
+      last_activity_at: config.last_activity_at || null
+    }))
+    
+    projects.value = projectItems
+    stats.value.projects = projectItems.length
   } catch (err) {
     console.error('Failed to load projects:', err)
   } finally {

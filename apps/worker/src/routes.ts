@@ -147,11 +147,6 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
     }
 
     // Projects API (Dashboard)
-    // GET /projects — list all projects with dashboard fields
-    if (pathname === '/projects' && method === 'GET') {
-      return await handleProjectsList(request, env);
-    }
-
     // GET /projects/activity — get activity counts per project
     if (pathname === '/projects/activity' && method === 'GET') {
       return await handleProjectsActivity(request, env);
@@ -379,22 +374,89 @@ async function handleHealth(request: Request, env: Env): Promise<Response> {
 
 /**
  * GET /config
- * List all project configs (index only)
+ * List all project configs with dashboard fields
  */
 async function handleConfigList(request: Request, env: Env): Promise<Response> {
   try {
-    const store = new ConfigStore({ db: env.DB, bucket: env.ARTIFACTS });
-    const result = await store.list();
+    // Check which columns exist (for backward compatibility)
+    const columnsResult = await env.DB.prepare(
+      `PRAGMA table_info(project_configs)`
+    ).all<{ name: string }>();
+    const columns = new Set((columnsResult.results || []).map(r => r.name));
+    
+    const hasPinned = columns.has('pinned');
+    const hasLastReviewed = columns.has('last_reviewed_at');
+    const hasLastActivity = columns.has('last_activity_at');
 
-    if (!result.success) {
-      return new Response(
-        JSON.stringify({ error: result.error }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
-      );
+    // Build query based on available columns
+    let query: string;
+    if (hasPinned && hasLastReviewed && hasLastActivity) {
+      query = `SELECT 
+        project_id, version, project_name, is_active, r2_key, hash, created_at, updated_at,
+        pinned, last_reviewed_at, last_activity_at
+      FROM project_configs 
+      ORDER BY updated_at DESC`;
+    } else {
+      query = `SELECT 
+        project_id, version, project_name, is_active, r2_key, hash, created_at, updated_at
+      FROM project_configs 
+      ORDER BY updated_at DESC`;
     }
 
+    const result = await env.DB.prepare(query).all<{
+      project_id: string;
+      version: string;
+      project_name: string;
+      is_active: number;
+      r2_key: string;
+      hash: string;
+      created_at: string;
+      updated_at: string;
+      pinned?: number;
+      last_reviewed_at?: string | null;
+      last_activity_at?: string | null;
+    }>();
+
+    const rows = result.results || [];
+
+    // Enrich with topic_label and sources_count from R2
+    const configs = await Promise.all(
+      rows.map(async (row) => {
+        let topicLabel = 'Unknown';
+        let sourcesCount = 0;
+
+        try {
+          const obj = await env.ARTIFACTS.get(row.r2_key);
+          if (obj) {
+            const content = await obj.text();
+            const config = JSON.parse(content);
+            topicLabel = config.topic?.label || 'Unknown';
+            sourcesCount = config.sources?.length || 0;
+          }
+        } catch {
+          // Fallback to defaults if R2 fetch fails
+        }
+
+        return {
+          project_id: row.project_id,
+          version: row.version,
+          project_name: row.project_name,
+          is_active: Boolean(row.is_active),
+          r2_key: row.r2_key,
+          hash: row.hash,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          topic_label: topicLabel,
+          sources_count: sourcesCount,
+          pinned: Boolean(row.pinned),
+          last_reviewed_at: row.last_reviewed_at || null,
+          last_activity_at: row.last_activity_at || null
+        };
+      })
+    );
+
     return new Response(
-      JSON.stringify({ configs: result.configs }),
+      JSON.stringify({ configs }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
   } catch (err) {
@@ -600,100 +662,42 @@ interface ProjectListItem {
 }
 
 /**
- * GET /projects
- * List all projects with dashboard fields
- */
-async function handleProjectsList(request: Request, env: Env): Promise<Response> {
-  try {
-    // Query project_configs with new fields
-    const result = await env.DB.prepare(
-      `SELECT 
-        pc.project_id,
-        pc.project_name,
-        pc.pinned,
-        pc.last_reviewed_at,
-        pc.last_activity_at,
-        pc.r2_key
-      FROM project_configs pc
-      ORDER BY pc.updated_at DESC`
-    ).all<{
-      project_id: string;
-      project_name: string;
-      pinned: number;
-      last_reviewed_at: string | null;
-      last_activity_at: string | null;
-      r2_key: string;
-    }>();
-
-    const rows = result.results || [];
-
-    // Fetch full configs to get topic and sources count
-    const projects: ProjectListItem[] = await Promise.all(
-      rows.map(async (row) => {
-        // Get config from R2 for topic and sources
-        let topicLabel = 'Unknown';
-        let sourcesCount = 0;
-
-        try {
-          const obj = await env.ARTIFACTS.get(row.r2_key);
-          if (obj) {
-            const content = await obj.text();
-            const config = JSON.parse(content);
-            topicLabel = config.topic?.label || 'Unknown';
-            sourcesCount = config.sources?.length || 0;
-          }
-        } catch {
-          // Fallback to defaults if R2 fetch fails
-        }
-
-        return {
-          project_id: row.project_id,
-          project_name: row.project_name,
-          topic_label: topicLabel,
-          sources_count: sourcesCount,
-          pinned: Boolean(row.pinned),
-          last_reviewed_at: row.last_reviewed_at,
-          last_activity_at: row.last_activity_at
-        };
-      })
-    );
-
-    return new Response(
-      JSON.stringify({ projects }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
-  } catch (err) {
-    return new Response(
-      JSON.stringify({ error: String(err) }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
-    );
-  }
-}
-
-/**
  * POST /projects/:id/review
  * Mark project as reviewed (sets last_reviewed_at to now)
  */
 async function handleProjectReview(request: Request, env: Env, projectId: string): Promise<Response> {
   try {
+    // Check which columns exist (for backward compatibility)
+    const columnsResult = await env.DB.prepare(
+      `PRAGMA table_info(project_configs)`
+    ).all<{ name: string }>();
+    const columns = new Set((columnsResult.results || []).map(r => r.name));
+    const hasLastReviewed = columns.has('last_reviewed_at');
+
     const now = new Date().toISOString();
 
-    const result = await env.DB.prepare(
-      `UPDATE project_configs 
-       SET last_reviewed_at = ?, updated_at = ?
-       WHERE project_id = ?`
-    ).bind(now, now, projectId).run();
+    if (hasLastReviewed) {
+      const result = await env.DB.prepare(
+        `UPDATE project_configs 
+         SET last_reviewed_at = ?, updated_at = ?
+         WHERE project_id = ?`
+      ).bind(now, now, projectId).run();
 
-    if (result.meta.changes === 0) {
-      return new Response(
-        JSON.stringify({ error: 'Project not found' }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
-      );
+      if (result.meta.changes === 0) {
+        return new Response(
+          JSON.stringify({ error: 'Project not found' }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
     // Fetch updated project
-    const row = await env.DB.prepare(
-      `SELECT 
+    const hasPinned = columns.has('pinned');
+    const hasLastActivity = columns.has('last_activity_at');
+    
+    let query: string;
+    if (hasPinned && hasLastReviewed && hasLastActivity) {
+      query = `SELECT 
         pc.project_id,
         pc.project_name,
         pc.pinned,
@@ -701,13 +705,22 @@ async function handleProjectReview(request: Request, env: Env, projectId: string
         pc.last_activity_at,
         pc.r2_key
       FROM project_configs pc
-      WHERE pc.project_id = ?`
-    ).bind(projectId).first<{
+      WHERE pc.project_id = ?`;
+    } else {
+      query = `SELECT 
+        pc.project_id,
+        pc.project_name,
+        pc.r2_key
+      FROM project_configs pc
+      WHERE pc.project_id = ?`;
+    }
+
+    const row = await env.DB.prepare(query).bind(projectId).first<{
       project_id: string;
       project_name: string;
-      pinned: number;
-      last_reviewed_at: string | null;
-      last_activity_at: string | null;
+      pinned?: number;
+      last_reviewed_at?: string | null;
+      last_activity_at?: string | null;
       r2_key: string;
     }>();
 
@@ -739,8 +752,8 @@ async function handleProjectReview(request: Request, env: Env, projectId: string
       topic_label: topicLabel,
       sources_count: sourcesCount,
       pinned: Boolean(row.pinned),
-      last_reviewed_at: row.last_reviewed_at,
-      last_activity_at: row.last_activity_at
+      last_reviewed_at: hasLastReviewed ? (row.last_reviewed_at || now) : now,
+      last_activity_at: row.last_activity_at || null
     };
 
     return new Response(
@@ -770,24 +783,37 @@ async function handleProjectUpdate(request: Request, env: Env, projectId: string
       );
     }
 
+    // Check which columns exist (for backward compatibility)
+    const columnsResult = await env.DB.prepare(
+      `PRAGMA table_info(project_configs)`
+    ).all<{ name: string }>();
+    const columns = new Set((columnsResult.results || []).map(r => r.name));
+    const hasPinned = columns.has('pinned');
+
     const now = new Date().toISOString();
 
-    const result = await env.DB.prepare(
-      `UPDATE project_configs 
-       SET pinned = ?, updated_at = ?
-       WHERE project_id = ?`
-    ).bind(body.pinned ? 1 : 0, now, projectId).run();
+    if (hasPinned) {
+      const result = await env.DB.prepare(
+        `UPDATE project_configs 
+         SET pinned = ?, updated_at = ?
+         WHERE project_id = ?`
+      ).bind(body.pinned ? 1 : 0, now, projectId).run();
 
-    if (result.meta.changes === 0) {
-      return new Response(
-        JSON.stringify({ error: 'Project not found' }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } }
-      );
+      if (result.meta.changes === 0) {
+        return new Response(
+          JSON.stringify({ error: 'Project not found' }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
     // Fetch updated project
-    const row = await env.DB.prepare(
-      `SELECT 
+    const hasLastReviewed = columns.has('last_reviewed_at');
+    const hasLastActivity = columns.has('last_activity_at');
+    
+    let query: string;
+    if (hasPinned && hasLastReviewed && hasLastActivity) {
+      query = `SELECT 
         pc.project_id,
         pc.project_name,
         pc.pinned,
@@ -795,13 +821,22 @@ async function handleProjectUpdate(request: Request, env: Env, projectId: string
         pc.last_activity_at,
         pc.r2_key
       FROM project_configs pc
-      WHERE pc.project_id = ?`
-    ).bind(projectId).first<{
+      WHERE pc.project_id = ?`;
+    } else {
+      query = `SELECT 
+        pc.project_id,
+        pc.project_name,
+        pc.r2_key
+      FROM project_configs pc
+      WHERE pc.project_id = ?`;
+    }
+
+    const row = await env.DB.prepare(query).bind(projectId).first<{
       project_id: string;
       project_name: string;
-      pinned: number;
-      last_reviewed_at: string | null;
-      last_activity_at: string | null;
+      pinned?: number;
+      last_reviewed_at?: string | null;
+      last_activity_at?: string | null;
       r2_key: string;
     }>();
 
@@ -832,9 +867,9 @@ async function handleProjectUpdate(request: Request, env: Env, projectId: string
       project_name: row.project_name,
       topic_label: topicLabel,
       sources_count: sourcesCount,
-      pinned: Boolean(row.pinned),
-      last_reviewed_at: row.last_reviewed_at,
-      last_activity_at: row.last_activity_at
+      pinned: hasPinned ? Boolean(row.pinned) : body.pinned,
+      last_reviewed_at: row.last_reviewed_at || null,
+      last_activity_at: row.last_activity_at || null
     };
 
     return new Response(
@@ -864,13 +899,30 @@ async function handleProjectsActivity(request: Request, env: Env): Promise<Respo
     const url = new URL(request.url);
     const window = url.searchParams.get('window') || '24h';
 
-    // Get all projects with their last_reviewed_at
-    const projectsResult = await env.DB.prepare(
-      `SELECT project_id, last_reviewed_at, last_activity_at FROM project_configs`
-    ).all<{
+    // Check which columns exist (for backward compatibility)
+    const columnsResult = await env.DB.prepare(
+      `PRAGMA table_info(project_configs)`
+    ).all<{ name: string }>();
+    const columns = new Set((columnsResult.results || []).map(r => r.name));
+    const hasLastReviewed = columns.has('last_reviewed_at');
+    const hasLastActivity = columns.has('last_activity_at');
+
+    // Get all projects with their last_reviewed_at (if column exists)
+    let query: string;
+    if (hasLastReviewed && hasLastActivity) {
+      query = `SELECT project_id, last_reviewed_at, last_activity_at FROM project_configs`;
+    } else if (hasLastReviewed) {
+      query = `SELECT project_id, last_reviewed_at FROM project_configs`;
+    } else if (hasLastActivity) {
+      query = `SELECT project_id, last_activity_at FROM project_configs`;
+    } else {
+      query = `SELECT project_id FROM project_configs`;
+    }
+
+    const projectsResult = await env.DB.prepare(query).all<{
       project_id: string;
-      last_reviewed_at: string | null;
-      last_activity_at: string | null;
+      last_reviewed_at?: string | null;
+      last_activity_at?: string | null;
     }>();
 
     const projects = projectsResult.results || [];
@@ -891,7 +943,7 @@ async function handleProjectsActivity(request: Request, env: Env): Promise<Respo
       projects.map(async (project) => {
         let count = 0;
 
-        if (window === 'since_review') {
+        if (window === 'since_review' && hasLastReviewed) {
           // Use project's last_reviewed_at, fallback to 7 days ago if null
           const reviewThreshold = project.last_reviewed_at 
             ? project.last_reviewed_at 
@@ -915,7 +967,7 @@ async function handleProjectsActivity(request: Request, env: Env): Promise<Respo
         return {
           project_id: project.project_id,
           events_count: count,
-          last_activity_at: project.last_activity_at
+          last_activity_at: project.last_activity_at || null
         };
       })
     );
